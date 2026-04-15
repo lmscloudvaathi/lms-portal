@@ -1,0 +1,34 @@
+# Render Blueprint: New → Blueprint → connect repo; set env vars in the dashboard.
+# Do not put secrets in this file. Use sync: false and configure in Render UI.
+
+services:
+  - type: web
+    name: iqmath-backend
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /docs
+    envVars:
+      - key: SECRET_KEY
+        sync: false
+      - key: ALGORITHM
+        sync: false
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: EMAIL_SENDER
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: AWS_LAMBDA_URL
+        sync: false

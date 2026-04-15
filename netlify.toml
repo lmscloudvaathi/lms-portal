@@ -1,0 +1,12 @@
+# Netlify: connect this repo and use these defaults (no secrets here).
+# In Netlify → Site settings → Environment variables, set at least:
+#   VITE_API_URL = https://<your-render-service>.onrender.com/api/v1
+# Add other VITE_* keys from frontend/.env.example as needed.
+
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
