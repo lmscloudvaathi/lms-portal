@@ -11,7 +11,7 @@ import BrandLogo from "./components/BrandLogo";
 import { saveSession } from "./utils/session";
 
 // 🔥 FIREBASE IMPORTS
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApp, getApps } from "firebase/app";
 import { getAuth, RecaptchaVerifier, signInWithPhoneNumber } from "firebase/auth";
 
 const firebaseConfig = {
@@ -24,18 +24,39 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
+const looksLikePlaceholder = (v: unknown) => {
+  const s = String(v ?? "").trim().toLowerCase();
+  return (
+    s === "" ||
+    s.includes("replace_me") ||
+    s.startsWith("your_") ||
+    s === "your_firebase_api_key" ||
+    s === "your_sender_id" ||
+    s === "your_app_id" ||
+    s === "your_measurement_id"
+  );
+};
+
 const FIREBASE_CONFIGURED = Boolean(
-  firebaseConfig.apiKey &&
-  firebaseConfig.authDomain &&
-  firebaseConfig.projectId &&
-  firebaseConfig.messagingSenderId &&
-  firebaseConfig.appId &&
-  !String(firebaseConfig.apiKey).includes("replace_me")
+  !looksLikePlaceholder(firebaseConfig.apiKey) &&
+  !looksLikePlaceholder(firebaseConfig.authDomain) &&
+  !looksLikePlaceholder(firebaseConfig.projectId) &&
+  !looksLikePlaceholder(firebaseConfig.messagingSenderId) &&
+  !looksLikePlaceholder(firebaseConfig.appId)
 );
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-auth.useDeviceLanguage();
+const getFirebaseAuthSafe = () => {
+  if (!FIREBASE_CONFIGURED) return null;
+  try {
+    const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    auth.useDeviceLanguage();
+    return auth;
+  } catch (err) {
+    console.error("Firebase init failed:", err);
+    return null;
+  }
+};
 
 declare global {
   interface Window {
@@ -103,6 +124,11 @@ const Login = () => {
       if (!container) return null;
       container.innerHTML = "";
 
+      const auth = getFirebaseAuthSafe();
+      if (!auth) {
+        triggerToast("Firebase OTP is not configured. Update frontend environment values.", "error");
+        return null;
+      }
       window.recaptchaVerifier = new RecaptchaVerifier(auth, targetId, {
         size: "normal",
         callback: () => {
@@ -170,6 +196,10 @@ const Login = () => {
         return;
       }
 
+      const auth = getFirebaseAuthSafe();
+      if (!auth) {
+        throw new Error("Firebase auth unavailable");
+      }
       const confirmation = await Promise.race([
         signInWithPhoneNumber(auth, phoneNumber, appVerifier),
         new Promise((_, reject) => setTimeout(() => reject(new Error("OTP request timeout")), 30000))
