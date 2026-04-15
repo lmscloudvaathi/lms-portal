@@ -11,12 +11,14 @@ const CodeArena = () => {
     const [showModal, setShowModal] = useState(false);
     const [tests, setTests] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
+    const [deletingId, setDeletingId] = useState<number | null>(null);
 
     // --- RESULTS STATE ---
     const [showResultsModal, setShowResultsModal] = useState(false);
     const [resultsLoading, setResultsLoading] = useState(false);
     const [selectedTestResults, setSelectedTestResults] = useState<any[]>([]);
     const [selectedTestTitle, setSelectedTestTitle] = useState("");
+    const [resultsTestId, setResultsTestId] = useState<number | null>(null);
 
     // --- CHALLENGE SETTINGS (Global) ---
     const [challengeTitle, setChallengeTitle] = useState("");
@@ -56,8 +58,29 @@ const CodeArena = () => {
         } catch (err) { console.error(err); }
     };
 
+    const handleDeleteChallenge = async (testId: number, title: string) => {
+        if (!window.confirm(`Delete "${title}"? All problems and student results for this challenge will be removed.`)) return;
+        const token = localStorage.getItem("token");
+        setDeletingId(testId);
+        try {
+            await axios.delete(`${API_BASE_URL}/code-tests/${testId}`, { headers: { Authorization: `Bearer ${token}` } });
+            setTests((prev) => prev.filter((t) => t.id !== testId));
+            if (showResultsModal && resultsTestId === testId) {
+                setShowResultsModal(false);
+                setResultsTestId(null);
+            }
+            triggerToast("Challenge deleted.", "success");
+        } catch (err) {
+            console.error(err);
+            triggerToast("Could not delete challenge.", "error");
+        } finally {
+            setDeletingId(null);
+        }
+    };
+
     const handleViewResults = async (testId: number, title: string) => {
         setSelectedTestTitle(title);
+        setResultsTestId(testId);
         setShowResultsModal(true);
         setResultsLoading(true);
 
@@ -107,10 +130,11 @@ const CodeArena = () => {
         setAiLoading(true);
         try {
             const token = localStorage.getItem("token");
-            const res = await axios.post(`${API_BASE_URL}/ai/generate`, { title: probTitle }, { headers: { Authorization: `Bearer ${token}` } });
+            const res = await axios.post(`${API_BASE_URL}/ai/generate-challenge`, { title: probTitle }, { headers: { Authorization: `Bearer ${token}` } });
 
             setProbDesc(res.data.description);
-            setTestCases(JSON.parse(res.data.test_cases));
+            const parsed = typeof res.data.test_cases === "string" ? JSON.parse(res.data.test_cases) : res.data.test_cases;
+            setTestCases(Array.isArray(parsed) ? parsed : [{ input: "", output: "", hidden: false }]);
             triggerToast("AI Generated Content Successfully!", "success"); // ✅ Added Success Toast
         } catch (err) {
             console.error(err);
@@ -154,6 +178,10 @@ const CodeArena = () => {
     };
 
     const handleSaveChallenge = async () => {
+        if (!challengeTitle.trim() || !passKey.trim()) {
+            triggerToast("Please set challenge title and pass key.", "error");
+            return;
+        }
         if (addedProblems.length === 0) {
             triggerToast("Please add at least one problem!", "error"); // ✅ Replaced Alert
             return;
@@ -215,12 +243,23 @@ const CodeArena = () => {
                                 </div>
                             </div>
 
-                            <button
-                                onClick={() => handleViewResults(test.id, test.title)}
-                                className="w-full md:w-auto px-4 py-2 bg-white border border-[#cbd5e1] rounded-lg text-[#005EB8] font-bold text-sm hover:bg-[#005EB8] hover:text-white transition-all flex items-center justify-center gap-2 shadow-sm"
-                            >
-                                <Users size={16} /> View Results
-                            </button>
+                            <div className="flex flex-col sm:flex-row w-full md:w-auto gap-2 shrink-0">
+                                <button
+                                    type="button"
+                                    onClick={() => handleViewResults(test.id, test.title)}
+                                    className="w-full sm:w-auto px-4 py-2 bg-white border border-[#cbd5e1] rounded-lg text-[#005EB8] font-bold text-sm hover:bg-[#005EB8] hover:text-white transition-all flex items-center justify-center gap-2 shadow-sm"
+                                >
+                                    <Users size={16} /> View Results
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => handleDeleteChallenge(test.id, test.title)}
+                                    disabled={deletingId === test.id}
+                                    className="w-full sm:w-auto px-4 py-2 bg-white border border-red-200 rounded-lg text-red-600 font-bold text-sm hover:bg-red-50 transition-all flex items-center justify-center gap-2 shadow-sm disabled:opacity-60"
+                                >
+                                    <Trash2 size={16} /> {deletingId === test.id ? "Deleting…" : "Delete"}
+                                </button>
+                            </div>
                         </div>
                     ))
                 )}
@@ -370,7 +409,7 @@ const CodeArena = () => {
                                     <button onClick={handleDownloadResults} className="px-4 py-2 bg-[#005EB8] text-white rounded-lg font-bold text-sm flex items-center gap-2 hover:bg-[#004a94] transition-colors">
                                         <Download size={16} /> Download CSV
                                     </button>
-                                    <button onClick={() => setShowResultsModal(false)} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"><X size={20} className="text-[#64748b]" /></button>
+                                    <button type="button" onClick={() => { setShowResultsModal(false); setResultsTestId(null); }} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"><X size={20} className="text-[#64748b]" /></button>
                                 </div>
                             </div>
 

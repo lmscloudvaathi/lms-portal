@@ -1,10 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import axios from "axios";
 import API_BASE_URL from './config';
 import {
     Plus, ArrowLeft, Video, HelpCircle, Zap, FileText,
-    Edit3, Layout, X, Link, Clock, Radio,
+    Edit3, Layout, X, Link, Clock, Radio, BookOpen, Search, ChevronDown,
     AlertCircle, Trash2, CheckCircle, Code, Edit, Sparkles
 } from "lucide-react";
 
@@ -20,6 +20,32 @@ interface CodeProblem {
     description: string;
     difficulty: string;
     testCases: { input: string; output: string }[];
+}
+
+interface ResourceLink {
+    title: string;
+    link: string;
+}
+
+interface LibraryItem {
+    id: number;
+    title: string;
+    type: string;
+    url?: string;
+    course_title: string;
+    module_title: string;
+    instructor_name: string;
+}
+
+interface LibraryCourse {
+    id: number;
+    title: string;
+}
+
+interface LibraryModule {
+    id: number;
+    title: string;
+    lesson_count: number;
 }
 
 const CourseBuilder = () => {
@@ -43,6 +69,7 @@ const CourseBuilder = () => {
     const [activeModal, setActiveModal] = useState<string | null>(null);
     const [itemTitle, setItemTitle] = useState("");
     const [itemUrl, setItemUrl] = useState("");
+    const [resourceLinks, setResourceLinks] = useState<ResourceLink[]>([{ title: "", link: "" }]);
     const [itemInstructions, setItemInstructions] = useState("");
     const [duration, setDuration] = useState("");
     const [isMandatory, setIsMandatory] = useState(false);
@@ -53,6 +80,27 @@ const CourseBuilder = () => {
         { title: "", description: "", difficulty: "Easy", testCases: [{ input: "", output: "" }] }
     ]);
     const [activeProblemIndex, setActiveProblemIndex] = useState(0);
+    const [showLibraryModal, setShowLibraryModal] = useState(false);
+    const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
+    const [libraryLoading, setLibraryLoading] = useState(false);
+    const [libraryAdding, setLibraryAdding] = useState(false);
+    const [libraryQuery, setLibraryQuery] = useState("");
+    const [libraryType, setLibraryType] = useState("all");
+    const [libraryCourseId, setLibraryCourseId] = useState("all");
+    const [libraryCourses, setLibraryCourses] = useState<LibraryCourse[]>([]);
+    const [selectedLibraryIds, setSelectedLibraryIds] = useState<number[]>([]);
+    const [libraryMode, setLibraryMode] = useState<"items" | "modules">("items");
+    const [sourceCourseId, setSourceCourseId] = useState("all");
+    const [sourceModules, setSourceModules] = useState<LibraryModule[]>([]);
+    const [selectedSourceModuleIds, setSelectedSourceModuleIds] = useState<number[]>([]);
+    const [modulesLoading, setModulesLoading] = useState(false);
+    const [modulesImporting, setModulesImporting] = useState(false);
+    const [isTypeDropdownOpen, setIsTypeDropdownOpen] = useState(false);
+    const [isCourseDropdownOpen, setIsCourseDropdownOpen] = useState(false);
+    const [isSourceCourseDropdownOpen, setIsSourceCourseDropdownOpen] = useState(false);
+    const typeDropdownRef = useRef<HTMLDivElement | null>(null);
+    const courseDropdownRef = useRef<HTMLDivElement | null>(null);
+    const sourceCourseDropdownRef = useRef<HTMLDivElement | null>(null);
 
     const [toast, setToast] = useState({ show: false, message: "", type: "success" });
 
@@ -106,6 +154,29 @@ const CourseBuilder = () => {
 
     useEffect(() => { fetchModules(); }, [courseId]);
 
+    useEffect(() => {
+        const handleOutsideClick = (event: MouseEvent) => {
+            const target = event.target as Node;
+            if (typeDropdownRef.current && !typeDropdownRef.current.contains(target)) {
+                setIsTypeDropdownOpen(false);
+            }
+            if (courseDropdownRef.current && !courseDropdownRef.current.contains(target)) {
+                setIsCourseDropdownOpen(false);
+            }
+            if (sourceCourseDropdownRef.current && !sourceCourseDropdownRef.current.contains(target)) {
+                setIsSourceCourseDropdownOpen(false);
+            }
+        };
+
+        if (showLibraryModal) {
+            document.addEventListener("mousedown", handleOutsideClick);
+        }
+
+        return () => {
+            document.removeEventListener("mousedown", handleOutsideClick);
+        };
+    }, [showLibraryModal]);
+
     const fetchModules = async () => {
         try {
             const token = localStorage.getItem("token");
@@ -122,6 +193,196 @@ const CourseBuilder = () => {
         } finally {
             // ✅ Stop loading only after data is ready (Stops Layout Shift)
             setIsLoading(false);
+        }
+    };
+
+    const fetchLibraryItems = async (search = libraryQuery, type = libraryType, selectedCourseId = libraryCourseId) => {
+        setLibraryLoading(true);
+        try {
+            const token = localStorage.getItem("token");
+            const res = await axios.get(`${API_BASE_URL}/library/items`, {
+                headers: { Authorization: `Bearer ${token}` },
+                params: {
+                    q: search || undefined,
+                    content_type: type !== "all" ? type : undefined,
+                    course_id: selectedCourseId !== "all" ? Number(selectedCourseId) : undefined,
+                }
+            });
+            setLibraryItems(res.data || []);
+        } catch (err: any) {
+            console.error("Failed to load library items", err);
+            const errorDetail = err?.response?.data?.detail;
+            const statusCode = err?.response?.status;
+            if (statusCode === 404) {
+                triggerToast("Library API not available on backend. Restart backend and try again.", "error");
+            } else if (statusCode === 401) {
+                triggerToast("Session expired. Please login again.", "error");
+            } else if (statusCode === 403) {
+                triggerToast(errorDetail || "Only instructors can access library.", "error");
+            } else {
+                triggerToast(errorDetail || "Failed to load library items", "error");
+            }
+        } finally {
+            setLibraryLoading(false);
+        }
+    };
+
+    const libraryTypeOptions = [
+        { value: "all", label: "All Types" },
+        { value: "video", label: "Video" },
+        { value: "note", label: "Note" },
+        { value: "quiz", label: "Quiz" },
+        { value: "code_test", label: "Code Test" },
+        { value: "assignment", label: "Assignment" },
+        { value: "live_class", label: "Live Class" },
+        { value: "live_test", label: "Live Test" },
+    ];
+
+    const selectedTypeLabel = libraryTypeOptions.find((option) => option.value === libraryType)?.label || "All Types";
+    const selectedCourseLabel =
+        libraryCourseId === "all"
+            ? "All Courses"
+            : (libraryCourses.find((course) => String(course.id) === libraryCourseId)?.title || "All Courses");
+    const selectedSourceCourseLabel =
+        sourceCourseId === "all"
+            ? "Select Source Course"
+            : (libraryCourses.find((course) => String(course.id) === sourceCourseId)?.title || "Select Source Course");
+
+    const fetchLibraryCourses = async () => {
+        try {
+            const token = localStorage.getItem("token");
+            const res = await axios.get(`${API_BASE_URL}/library/courses`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setLibraryCourses(res.data || []);
+        } catch (err) {
+            console.error("Failed to load library courses", err);
+        }
+    };
+
+    const fetchSourceModules = async (selectedCourseId = sourceCourseId) => {
+        if (selectedCourseId === "all") {
+            setSourceModules([]);
+            return;
+        }
+        setModulesLoading(true);
+        try {
+            const token = localStorage.getItem("token");
+            const res = await axios.get(`${API_BASE_URL}/library/course-modules`, {
+                headers: { Authorization: `Bearer ${token}` },
+                params: { course_id: Number(selectedCourseId) }
+            });
+            setSourceModules(res.data || []);
+        } catch (err: any) {
+            triggerToast(err?.response?.data?.detail || "Failed to load source modules", "error");
+            setSourceModules([]);
+        } finally {
+            setModulesLoading(false);
+        }
+    };
+
+    const toggleSourceModuleSelection = (moduleId: number) => {
+        setSelectedSourceModuleIds((prev) =>
+            prev.includes(moduleId) ? prev.filter((id) => id !== moduleId) : [...prev, moduleId]
+        );
+    };
+
+    const importSelectedModules = async () => {
+        if (!courseId) {
+            triggerToast("Target course is not available", "error");
+            return;
+        }
+        if (selectedSourceModuleIds.length === 0) {
+            triggerToast("Select at least one module to import", "error");
+            return;
+        }
+        setModulesImporting(true);
+        try {
+            const token = localStorage.getItem("token");
+            await axios.post(
+                `${API_BASE_URL}/library/import-modules`,
+                {
+                    target_course_id: Number(courseId),
+                    module_ids: selectedSourceModuleIds
+                },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            triggerToast(`Imported ${selectedSourceModuleIds.length} module(s)`, "success");
+            setSelectedSourceModuleIds([]);
+            setShowLibraryModal(false);
+            fetchModules();
+        } catch (err: any) {
+            triggerToast(err?.response?.data?.detail || "Failed to import modules", "error");
+        } finally {
+            setModulesImporting(false);
+        }
+    };
+
+    const handleDeleteModule = async (moduleId: number) => {
+        if (!window.confirm("Delete this module and all its items?")) return;
+        try {
+            const token = localStorage.getItem("token");
+            await axios.delete(`${API_BASE_URL}/modules/${moduleId}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            const remaining = modules.filter((m) => m.id !== moduleId);
+            setModules(remaining);
+
+            if (selectedModuleId === moduleId) {
+                setSelectedModuleId(remaining.length ? remaining[0].id : null);
+            }
+
+            triggerToast("Module deleted", "success");
+        } catch (err: any) {
+            triggerToast(err?.response?.data?.detail || "Failed to delete module", "error");
+        }
+    };
+
+    const openLibraryModal = async () => {
+        setSelectedLibraryIds([]);
+        setSelectedSourceModuleIds([]);
+        setLibraryMode(selectedModuleId ? "items" : "modules");
+        setIsTypeDropdownOpen(false);
+        setIsCourseDropdownOpen(false);
+        setIsSourceCourseDropdownOpen(false);
+        setSourceCourseId("all");
+        setSourceModules([]);
+        setShowLibraryModal(true);
+        await fetchLibraryCourses();
+        await fetchLibraryItems();
+    };
+
+    const toggleLibrarySelection = (itemId: number) => {
+        setSelectedLibraryIds((prev) =>
+            prev.includes(itemId) ? prev.filter((id) => id !== itemId) : [...prev, itemId]
+        );
+    };
+
+    const addSelectedFromLibrary = async () => {
+        if (!selectedModuleId) {
+            triggerToast("Select a target module first", "error");
+            return;
+        }
+        if (selectedLibraryIds.length === 0) {
+            triggerToast("Select at least one library item", "error");
+            return;
+        }
+        setLibraryAdding(true);
+        try {
+            const token = localStorage.getItem("token");
+            await axios.post(
+                `${API_BASE_URL}/library/add-to-module`,
+                { module_id: selectedModuleId, item_ids: selectedLibraryIds },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            triggerToast(`${selectedLibraryIds.length} item(s) added from library`, "success");
+            setShowLibraryModal(false);
+            setSelectedLibraryIds([]);
+        } catch (err: any) {
+            triggerToast(err?.response?.data?.detail || "Failed to add library items", "error");
+        } finally {
+            setLibraryAdding(false);
         }
     };
 
@@ -188,6 +449,21 @@ const CourseBuilder = () => {
         setProblems(updatedProblems);
     };
 
+    const updateResourceLink = (index: number, field: "title" | "link", value: string) => {
+        setResourceLinks((prev) => prev.map((resource, i) => (i === index ? { ...resource, [field]: value } : resource)));
+    };
+
+    const addResourceLink = () => {
+        setResourceLinks((prev) => [...prev, { title: "", link: "" }]);
+    };
+
+    const removeResourceLink = (index: number) => {
+        setResourceLinks((prev) => {
+            const next = prev.filter((_, i) => i !== index);
+            return next.length ? next : [{ title: "", link: "" }];
+        });
+    };
+
     // ✅ MAIN SAVE LOGIC
     const saveContentItem = async () => {
         if (!selectedModuleId) return triggerToast("Select a module from the sidebar first!", "error");
@@ -237,6 +513,13 @@ const CourseBuilder = () => {
             end_time: endTime || null
         };
 
+        if (activeModal === "Video") {
+            const cleanedLinks = resourceLinks
+                .map((resource) => ({ title: resource.title.trim(), link: resource.link.trim() }))
+                .filter((resource) => resource.title && resource.link);
+            payload.resource_links = cleanedLinks;
+        }
+
         // ✅ FIX: Package multiple problems into one JSON string
         if (activeModal === "Code Test") {
             for (let i = 0; i < problems.length; i++) {
@@ -257,6 +540,7 @@ const CourseBuilder = () => {
     const resetForm = () => {
         setItemTitle(""); setItemUrl(""); setItemInstructions("");
         setDuration(""); setIsMandatory(false);
+        setResourceLinks([{ title: "", link: "" }]);
 
         // ✅ ADD THESE:
         setStartTime(""); setEndTime("");
@@ -693,7 +977,26 @@ const CourseBuilder = () => {
                         {modules.map((m) => (
                             <div key={m.id} onClick={() => setSelectedModuleId(m.id)} style={{ display: "flex", alignItems: "center", gap: "12px", padding: "14px", background: selectedModuleId === m.id ? "#E2E8F0" : "white", borderRadius: "12px", border: selectedModuleId === m.id ? `1.5px solid ${brand.blue}` : `1px solid ${brand.border}`, cursor: "pointer", transition: "all 0.2s ease" }}>
                                 <Layout size={18} color={selectedModuleId === m.id ? brand.blue : brand.textLight} />
-                                <span style={{ fontSize: "14px", fontWeight: "600", color: brand.textMain }}>{m.title}</span>
+                                <span style={{ fontSize: "14px", fontWeight: "600", color: brand.textMain, flex: 1 }}>{m.title}</span>
+                                <button
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleDeleteModule(m.id);
+                                    }}
+                                    style={{
+                                        border: "none",
+                                        background: "transparent",
+                                        color: "#ef4444",
+                                        cursor: "pointer",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        padding: "4px"
+                                    }}
+                                    title="Delete module"
+                                >
+                                    <Trash2 size={16} />
+                                </button>
                             </div>
                         ))}
                         {showAddModule ? (
@@ -725,6 +1028,7 @@ const CourseBuilder = () => {
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-[850px] mx-auto">
                         {[
+                            { type: "Add from Library", icon: <BookOpen size={28} color={brand.blue} />, desc: "Reuse existing items" },
                             { type: "Note", icon: <Edit3 size={28} color={brand.blue} />, desc: "Drive PDF Links" },
                             { type: "Video", icon: <Video size={28} color={brand.blue} />, desc: "YouTube lessons" },
                             { type: "Quiz", icon: <HelpCircle size={28} color={brand.blue} />, desc: "Google Form Links" },
@@ -733,7 +1037,7 @@ const CourseBuilder = () => {
                             { type: "Live Class", icon: <Radio size={28} color="#ef4444" />, desc: "YouTube Live Link" },
                             { type: "Live Test", icon: <Zap size={28} color="#EAB308" />, desc: "Timed assessment" },
                         ].map(item => (
-                            <div key={item.type} onClick={() => setActiveModal(item.type)} style={selectorCard}>
+                            <div key={item.type} onClick={() => item.type === "Add from Library" ? openLibraryModal() : setActiveModal(item.type)} style={selectorCard}>
                                 {item.icon}
                                 <div style={{ textAlign: "left" }}><div style={cardTitle}>{item.type}</div><div style={cardDesc}>{item.desc}</div></div>
                             </div>
@@ -741,6 +1045,428 @@ const CourseBuilder = () => {
                     </div>
                 </main >
             </div >
+
+            {showLibraryModal && (
+                <div style={modalOverlay}>
+                    <div style={{ ...modalContent, maxWidth: "900px", maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+                            <h3 style={{ fontSize: "22px", fontWeight: "800", margin: 0 }}>Add from Library</h3>
+                            <X onClick={() => setShowLibraryModal(false)} style={{ cursor: "pointer", color: brand.textLight }} />
+                        </div>
+
+                        <div style={{ display: "flex", gap: "10px", marginBottom: "12px" }}>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    if (!selectedModuleId) {
+                                        triggerToast("Select a module first to use Items Library", "error");
+                                        return;
+                                    }
+                                    setLibraryMode("items");
+                                    setIsSourceCourseDropdownOpen(false);
+                                }}
+                                style={{ border: "none", background: libraryMode === "items" ? brand.blue : "#e2e8f0", color: libraryMode === "items" ? "white" : brand.textMain, padding: "10px 14px", borderRadius: "10px", fontWeight: 700, cursor: selectedModuleId ? "pointer" : "not-allowed", opacity: selectedModuleId ? 1 : 0.6 }}
+                            >
+                                Items Library
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setLibraryMode("modules");
+                                    setIsTypeDropdownOpen(false);
+                                    setIsCourseDropdownOpen(false);
+                                }}
+                                style={{ border: "none", background: libraryMode === "modules" ? brand.blue : "#e2e8f0", color: libraryMode === "modules" ? "white" : brand.textMain, padding: "10px 14px", borderRadius: "10px", fontWeight: 700, cursor: "pointer" }}
+                            >
+                                Import Modules
+                            </button>
+                        </div>
+
+                        {libraryMode === "items" ? (
+                            <>
+                                <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr auto", gap: "10px", marginBottom: "14px", alignItems: "end", padding: "10px", background: "#f1f5f9", border: `1px solid ${brand.border}`, borderRadius: "12px" }}>
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ ...labelStyle, marginBottom: "6px" }}>Search</label>
+                                        <div style={{ position: "relative" }}>
+                                            <Search size={16} style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: brand.textLight, pointerEvents: "none" }} />
+                                            <input
+                                                value={libraryQuery}
+                                                onChange={(e) => setLibraryQuery(e.target.value)}
+                                                placeholder="Search by title, course, module, instructor..."
+                                                style={{ ...inputStyle, paddingLeft: "36px", background: "#ffffff", borderColor: "#94a3b8" }}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div ref={typeDropdownRef} style={{ position: "relative" }}>
+                                        <label style={{ ...labelStyle, marginBottom: "6px" }}>Type</label>
+                                        <div style={{ position: "relative" }}>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setIsTypeDropdownOpen((prev) => !prev);
+                                                    setIsCourseDropdownOpen(false);
+                                                }}
+                                                style={{
+                                                    ...inputStyle,
+                                                    width: "100%",
+                                                    paddingRight: "36px",
+                                                    background: "#ffffff",
+                                                    borderColor: "#94a3b8",
+                                                    fontWeight: 600,
+                                                    textAlign: "left",
+                                                    cursor: "pointer"
+                                                }}
+                                            >
+                                                {selectedTypeLabel}
+                                            </button>
+                                            <ChevronDown size={16} style={{ position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)", color: brand.textLight, pointerEvents: "none" }} />
+                                            {isTypeDropdownOpen && (
+                                                <div
+                                                    style={{
+                                                        position: "absolute",
+                                                        top: "calc(100% + 6px)",
+                                                        left: 0,
+                                                        right: 0,
+                                                        zIndex: 1200,
+                                                        background: "white",
+                                                        border: `1px solid ${brand.border}`,
+                                                        borderRadius: "10px",
+                                                        boxShadow: "0 12px 30px rgba(15,23,42,0.12)",
+                                                        maxHeight: "240px",
+                                                        overflowY: "auto",
+                                                        padding: "6px"
+                                                    }}
+                                                >
+                                                    {libraryTypeOptions.map((option) => (
+                                                        <button
+                                                            key={option.value}
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setLibraryType(option.value);
+                                                                setIsTypeDropdownOpen(false);
+                                                            }}
+                                                            style={{
+                                                                width: "100%",
+                                                                textAlign: "left",
+                                                                border: "none",
+                                                                background: libraryType === option.value ? "#eff6ff" : "transparent",
+                                                                color: libraryType === option.value ? "#1d4ed8" : brand.textMain,
+                                                                padding: "10px 12px",
+                                                                borderRadius: "8px",
+                                                                cursor: "pointer",
+                                                                fontWeight: libraryType === option.value ? 700 : 500,
+                                                                fontSize: "14px"
+                                                            }}
+                                                        >
+                                                            {option.label}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div ref={courseDropdownRef} style={{ position: "relative" }}>
+                                        <label style={{ ...labelStyle, marginBottom: "6px" }}>Course</label>
+                                        <div style={{ position: "relative" }}>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setIsCourseDropdownOpen((prev) => !prev);
+                                                    setIsTypeDropdownOpen(false);
+                                                }}
+                                                style={{
+                                                    ...inputStyle,
+                                                    width: "100%",
+                                                    paddingRight: "36px",
+                                                    background: "#ffffff",
+                                                    borderColor: "#94a3b8",
+                                                    fontWeight: 600,
+                                                    textAlign: "left",
+                                                    cursor: "pointer",
+                                                    whiteSpace: "nowrap",
+                                                    overflow: "hidden",
+                                                    textOverflow: "ellipsis"
+                                                }}
+                                            >
+                                                {selectedCourseLabel}
+                                            </button>
+                                            <ChevronDown size={16} style={{ position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)", color: brand.textLight, pointerEvents: "none" }} />
+                                            {isCourseDropdownOpen && (
+                                                <div
+                                                    style={{
+                                                        position: "absolute",
+                                                        top: "calc(100% + 6px)",
+                                                        left: 0,
+                                                        right: 0,
+                                                        zIndex: 1200,
+                                                        background: "white",
+                                                        border: `1px solid ${brand.border}`,
+                                                        borderRadius: "10px",
+                                                        boxShadow: "0 12px 30px rgba(15,23,42,0.12)",
+                                                        maxHeight: "240px",
+                                                        overflowY: "auto",
+                                                        padding: "6px"
+                                                    }}
+                                                >
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setLibraryCourseId("all");
+                                                            setIsCourseDropdownOpen(false);
+                                                        }}
+                                                        style={{
+                                                            width: "100%",
+                                                            textAlign: "left",
+                                                            border: "none",
+                                                            background: libraryCourseId === "all" ? "#eff6ff" : "transparent",
+                                                            color: libraryCourseId === "all" ? "#1d4ed8" : brand.textMain,
+                                                            padding: "10px 12px",
+                                                            borderRadius: "8px",
+                                                            cursor: "pointer",
+                                                            fontWeight: libraryCourseId === "all" ? 700 : 500,
+                                                            fontSize: "14px"
+                                                        }}
+                                                    >
+                                                        All Courses
+                                                    </button>
+                                                    {libraryCourses.map((course) => (
+                                                        <button
+                                                            key={course.id}
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setLibraryCourseId(String(course.id));
+                                                                setIsCourseDropdownOpen(false);
+                                                            }}
+                                                            style={{
+                                                                width: "100%",
+                                                                textAlign: "left",
+                                                                border: "none",
+                                                                background: libraryCourseId === String(course.id) ? "#eff6ff" : "transparent",
+                                                                color: libraryCourseId === String(course.id) ? "#1d4ed8" : brand.textMain,
+                                                                padding: "10px 12px",
+                                                                borderRadius: "8px",
+                                                                cursor: "pointer",
+                                                                fontWeight: libraryCourseId === String(course.id) ? 700 : 500,
+                                                                fontSize: "14px"
+                                                            }}
+                                                            title={course.title}
+                                                        >
+                                                            {course.title}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setIsTypeDropdownOpen(false);
+                                            setIsCourseDropdownOpen(false);
+                                            fetchLibraryItems();
+                                        }}
+                                        style={{ padding: "0 20px", height: "48px", borderRadius: "10px", border: "none", background: brand.blue, color: "white", fontWeight: 700, cursor: "pointer", boxShadow: "0 6px 16px rgba(0,94,184,0.25)" }}
+                                    >
+                                        Search
+                                    </button>
+                                </div>
+
+                                <div style={{ fontSize: "12px", color: brand.textLight, marginBottom: "10px" }}>
+                                    Target Module: <span style={{ color: brand.blue, fontWeight: 700 }}>{modules.find((m) => m.id === selectedModuleId)?.title || "Not selected"}</span>
+                                </div>
+
+                                <div style={{ overflowY: "auto", border: `1px solid ${brand.border}`, borderRadius: "12px", background: "white", flex: 1, minHeight: 0 }}>
+                                    {libraryLoading ? (
+                                        <div style={{ padding: "30px", textAlign: "center", color: brand.textLight }}>Loading library...</div>
+                                    ) : libraryItems.length === 0 ? (
+                                        <div style={{ padding: "30px", textAlign: "center", color: brand.textLight }}>No library items found.</div>
+                                    ) : (
+                                        libraryItems.map((item) => (
+                                            <label
+                                                key={item.id}
+                                                style={{
+                                                    display: "flex",
+                                                    alignItems: "flex-start",
+                                                    gap: "12px",
+                                                    padding: "14px 16px",
+                                                    borderBottom: `1px solid ${brand.border}`,
+                                                    cursor: "pointer",
+                                                    background: selectedLibraryIds.includes(item.id) ? "#eff6ff" : "white"
+                                                }}
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedLibraryIds.includes(item.id)}
+                                                    onChange={() => toggleLibrarySelection(item.id)}
+                                                    style={{ marginTop: "3px" }}
+                                                />
+                                                <div style={{ flex: 1 }}>
+                                                    <div style={{ fontWeight: 700, color: brand.textMain, marginBottom: "3px" }}>{item.title}</div>
+                                                    <div style={{ fontSize: "11px", color: brand.textLight, display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                                                        <span style={{ fontWeight: 700, textTransform: "uppercase", color: "#334155" }}>{item.type}</span>
+                                                        <span>Course: {item.course_title}</span>
+                                                        <span>Module: {item.module_title}</span>
+                                                        <span>Instructor: {item.instructor_name}</span>
+                                                    </div>
+                                                </div>
+                                            </label>
+                                        ))
+                                    )}
+                                </div>
+
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "14px", paddingTop: "12px", borderTop: `1px solid ${brand.border}` }}>
+                                    <div style={{ fontSize: "13px", color: brand.textLight }}>
+                                        Selected: <span style={{ color: brand.textMain, fontWeight: 700 }}>{selectedLibraryIds.length}</span>
+                                    </div>
+                                    <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowLibraryModal(false)}
+                                            style={{ padding: "10px 16px", borderRadius: "10px", border: `1px solid ${brand.border}`, background: "white", color: brand.textMain, fontWeight: 700, cursor: "pointer" }}
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={addSelectedFromLibrary}
+                                            disabled={libraryAdding}
+                                            style={{ padding: "10px 16px", borderRadius: "10px", border: "none", background: brand.green, color: "white", fontWeight: 800, cursor: "pointer", opacity: libraryAdding ? 0.7 : 1 }}
+                                        >
+                                            {libraryAdding ? "Adding..." : "Add Selected to Module"}
+                                        </button>
+                                    </div>
+                                </div>
+                            </>
+                        ) : (
+                            <>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "10px", marginBottom: "14px", alignItems: "end", padding: "10px", background: "#f1f5f9", border: `1px solid ${brand.border}`, borderRadius: "12px" }}>
+                                    <div ref={sourceCourseDropdownRef} style={{ position: "relative" }}>
+                                        <label style={{ ...labelStyle, marginBottom: "6px" }}>Source Course</label>
+                                        <div style={{ position: "relative" }}>
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsSourceCourseDropdownOpen((prev) => !prev)}
+                                                style={{
+                                                    ...inputStyle,
+                                                    width: "100%",
+                                                    paddingRight: "36px",
+                                                    background: "#ffffff",
+                                                    borderColor: "#94a3b8",
+                                                    fontWeight: 600,
+                                                    textAlign: "left",
+                                                    cursor: "pointer",
+                                                    whiteSpace: "nowrap",
+                                                    overflow: "hidden",
+                                                    textOverflow: "ellipsis"
+                                                }}
+                                            >
+                                                {selectedSourceCourseLabel}
+                                            </button>
+                                            <ChevronDown size={16} style={{ position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)", color: brand.textLight, pointerEvents: "none" }} />
+                                            {isSourceCourseDropdownOpen && (
+                                                <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, zIndex: 1200, background: "white", border: `1px solid ${brand.border}`, borderRadius: "10px", boxShadow: "0 12px 30px rgba(15,23,42,0.12)", maxHeight: "240px", overflowY: "auto", padding: "6px" }}>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setSourceCourseId("all");
+                                                            setIsSourceCourseDropdownOpen(false);
+                                                            setSourceModules([]);
+                                                        }}
+                                                        style={{ width: "100%", textAlign: "left", border: "none", background: sourceCourseId === "all" ? "#eff6ff" : "transparent", color: sourceCourseId === "all" ? "#1d4ed8" : brand.textMain, padding: "10px 12px", borderRadius: "8px", cursor: "pointer", fontWeight: sourceCourseId === "all" ? 700 : 500, fontSize: "14px" }}
+                                                    >
+                                                        Select Source Course
+                                                    </button>
+                                                    {libraryCourses.map((course) => (
+                                                        <button
+                                                            key={course.id}
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setSourceCourseId(String(course.id));
+                                                                setIsSourceCourseDropdownOpen(false);
+                                                            }}
+                                                            style={{ width: "100%", textAlign: "left", border: "none", background: sourceCourseId === String(course.id) ? "#eff6ff" : "transparent", color: sourceCourseId === String(course.id) ? "#1d4ed8" : brand.textMain, padding: "10px 12px", borderRadius: "8px", cursor: "pointer", fontWeight: sourceCourseId === String(course.id) ? 700 : 500, fontSize: "14px" }}
+                                                        >
+                                                            {course.title}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => fetchSourceModules()}
+                                        disabled={sourceCourseId === "all"}
+                                        style={{ padding: "0 20px", height: "48px", borderRadius: "10px", border: "none", background: brand.blue, color: "white", fontWeight: 700, cursor: sourceCourseId === "all" ? "not-allowed" : "pointer", opacity: sourceCourseId === "all" ? 0.6 : 1 }}
+                                    >
+                                        Load Modules
+                                    </button>
+                                </div>
+
+                                <div style={{ fontSize: "12px", color: brand.textLight, marginBottom: "10px" }}>
+                                    Target Course: <span style={{ color: brand.blue, fontWeight: 700 }}>{courseDetails?.title || `Course ${courseId}`}</span>
+                                </div>
+
+                                <div style={{ overflowY: "auto", border: `1px solid ${brand.border}`, borderRadius: "12px", background: "white", flex: 1, minHeight: 0 }}>
+                                    {modulesLoading ? (
+                                        <div style={{ padding: "30px", textAlign: "center", color: brand.textLight }}>Loading modules...</div>
+                                    ) : sourceModules.length === 0 ? (
+                                        <div style={{ padding: "30px", textAlign: "center", color: brand.textLight }}>No modules loaded. Select a source course and click "Load Modules".</div>
+                                    ) : (
+                                        sourceModules.map((module) => (
+                                            <label
+                                                key={module.id}
+                                                style={{
+                                                    display: "flex",
+                                                    alignItems: "center",
+                                                    gap: "12px",
+                                                    padding: "14px 16px",
+                                                    borderBottom: `1px solid ${brand.border}`,
+                                                    cursor: "pointer",
+                                                    background: selectedSourceModuleIds.includes(module.id) ? "#eff6ff" : "white"
+                                                }}
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedSourceModuleIds.includes(module.id)}
+                                                    onChange={() => toggleSourceModuleSelection(module.id)}
+                                                />
+                                                <div style={{ flex: 1 }}>
+                                                    <div style={{ fontWeight: 700, color: brand.textMain }}>{module.title}</div>
+                                                    <div style={{ fontSize: "12px", color: brand.textLight }}>{module.lesson_count} item(s)</div>
+                                                </div>
+                                            </label>
+                                        ))
+                                    )}
+                                </div>
+
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "14px", paddingTop: "12px", borderTop: `1px solid ${brand.border}` }}>
+                                    <div style={{ fontSize: "13px", color: brand.textLight }}>
+                                        Selected Modules: <span style={{ color: brand.textMain, fontWeight: 700 }}>{selectedSourceModuleIds.length}</span>
+                                    </div>
+                                    <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowLibraryModal(false)}
+                                            style={{ padding: "10px 16px", borderRadius: "10px", border: `1px solid ${brand.border}`, background: "white", color: brand.textMain, fontWeight: 700, cursor: "pointer" }}
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={importSelectedModules}
+                                            disabled={modulesImporting}
+                                            style={{ padding: "10px 16px", borderRadius: "10px", border: "none", background: brand.green, color: "white", fontWeight: 800, cursor: "pointer", opacity: modulesImporting ? 0.7 : 1 }}
+                                        >
+                                            {modulesImporting ? "Importing..." : "Import Selected Modules"}
+                                        </button>
+                                    </div>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {activeModal && (
                 <div style={modalOverlay}>
@@ -799,6 +1525,60 @@ const CourseBuilder = () => {
                                                     : activeModal === "Note" ? "Google Drive PDF Link"
                                                         : "YouTube / Google Form / App Script Link"}
                                             </label><div style={{ position: "relative" }}><Link size={18} style={{ position: "absolute", left: "14px", top: "14px", color: brand.textLight }} /><input value={itemUrl} onChange={(e) => setItemUrl(e.target.value)} placeholder="https://..." style={{ ...inputStyle, paddingLeft: "45px" }} /></div></div>
+                                        {activeModal === "Video" && (
+                                            <div>
+                                                <label style={labelStyle}>Resource Links (Optional)</label>
+                                                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                                                    {resourceLinks.map((resourceLink, idx) => (
+                                                        <div key={idx} style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                                                            <input
+                                                                value={resourceLink.title}
+                                                                onChange={(e) => updateResourceLink(idx, "title", e.target.value)}
+                                                                placeholder="Resource title (e.g. Worksheet PDF)"
+                                                                style={{ ...inputStyle, flex: 1 }}
+                                                            />
+                                                            <input
+                                                                value={resourceLink.link}
+                                                                onChange={(e) => updateResourceLink(idx, "link", e.target.value)}
+                                                                placeholder="https://resource-link..."
+                                                                style={{ ...inputStyle, flex: 1 }}
+                                                            />
+                                                            {resourceLinks.length > 1 && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => removeResourceLink(idx)}
+                                                                    style={{
+                                                                        border: "none",
+                                                                        background: "#fee2e2",
+                                                                        color: "#dc2626",
+                                                                        borderRadius: "8px",
+                                                                        padding: "10px 12px",
+                                                                        cursor: "pointer",
+                                                                        fontWeight: 700
+                                                                    }}
+                                                                >
+                                                                    Remove
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={addResourceLink}
+                                                    style={{
+                                                        marginTop: "10px",
+                                                        border: "none",
+                                                        background: "none",
+                                                        color: brand.blue,
+                                                        cursor: "pointer",
+                                                        fontWeight: 700
+                                                    }}
+                                                >
+                                                    + Add Another Resource Link
+                                                </button>
+                                            </div>
+                                        )}
                                         {activeModal === "Assignment" && (<div style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "5px" }}><input type="checkbox" id="mandatoryCheck" checked={isMandatory} onChange={(e) => setIsMandatory(e.target.checked)} style={{ width: "18px", height: "18px", cursor: "pointer" }} /><label htmlFor="mandatoryCheck" style={{ fontSize: "14px", color: "#475569", fontWeight: "600", cursor: "pointer" }}>Mark as Mandatory</label></div>)}
                                         {activeModal === "Live Test" && (
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>

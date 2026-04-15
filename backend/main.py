@@ -3,12 +3,12 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload 
-from sqlalchemy import delete
+from sqlalchemy import delete, func
 from pydantic import BaseModel
 import bcrypt 
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import models
 from database import engine, get_db # Importing the Async engine and dependency
 from fastapi.middleware.cors import CORSMiddleware
@@ -87,6 +87,7 @@ async def init_models():
             
             # 🆕 FIX FOR YOUR ERROR: Add last_login column
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMP;"))
+            await conn.execute(text("ALTER TABLE content_items ADD COLUMN IF NOT EXISTS resource_links TEXT;"))
             
             print("Database migrations applied successfully.")
         except Exception as e:
@@ -149,9 +150,14 @@ class ModuleCreate(BaseModel):
 class ReorderModulesRequest(BaseModel):
     module_ids: List[int]
 
+class ResourceLinkInput(BaseModel):
+    title: str
+    link: str
+
 class ContentCreate(BaseModel):
     title: str; type: str; data_url: Optional[str] = None; duration: Optional[int] = None; 
     is_mandatory: bool = False; instructions: Optional[str] = None; test_config: Optional[str] = None; module_id: int
+    resource_links: Optional[List[ResourceLinkInput]] = None
     # ✅ NEW
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
@@ -197,7 +203,15 @@ class TestSubmission(BaseModel):
     test_id: int; score: int; problems_solved: int; time_taken: str
 
 class ContentUpdate(BaseModel):
-    title: Optional[str] = None; url: Optional[str] = None
+    title: Optional[str] = None; url: Optional[str] = None; resource_links: Optional[List[ResourceLinkInput]] = None
+
+class LibraryBulkAddRequest(BaseModel):
+    module_id: int
+    item_ids: List[int]
+
+class LibraryImportModulesRequest(BaseModel):
+    target_course_id: int
+    module_ids: List[int]
 
 class CodeExecutionRequest(BaseModel):
     source_code: str; stdin: str; language_id: int = 71
@@ -233,6 +247,11 @@ class CodePayload(BaseModel):
     # ✅ NEW: Accepts a list of test cases (Batch Execution)
     # Example: [{"input": "5", "output": "25"}, {"input": "10", "output": "100"}]
     test_cases: List[Dict[str, Any]]
+    # When both set, server loads canonical cases from DB (Code Arena integrity)
+    code_test_id: Optional[int] = None
+    problem_id: Optional[int] = None
+    # "dry_run" = only non-hidden cases (when loading from DB)
+    execution_mode: Optional[str] = None
 
 class OTPLoginRequest(BaseModel):
     phone_number: str
@@ -258,6 +277,40 @@ class ChallengeUpdate(BaseModel):
     description: Optional[str] = None
     difficulty: Optional[str] = None
     test_cases: Optional[str] = None
+
+def normalize_resource_links(resource_links: Optional[List[ResourceLinkInput]]) -> List[Dict[str, str]]:
+    cleaned: List[Dict[str, str]] = []
+    for item in resource_links or []:
+        title = (item.title or "").strip()
+        link = (item.link or "").strip()
+        if title and link:
+            cleaned.append({"title": title, "link": link})
+    return cleaned
+
+def parse_resource_links(raw_links: Optional[str]) -> List[Dict[str, str]]:
+    if not raw_links:
+        return []
+    try:
+        parsed = json.loads(raw_links)
+        if isinstance(parsed, list):
+            parsed_links: List[Dict[str, str]] = []
+            for entry in parsed:
+                # Backward compatibility for old shape: ["https://..."]
+                if isinstance(entry, str):
+                    link = entry.strip()
+                    if link:
+                        parsed_links.append({"title": link, "link": link})
+                    continue
+
+                if isinstance(entry, dict):
+                    title = str(entry.get("title", "")).strip()
+                    link = str(entry.get("link", entry.get("url", ""))).strip()
+                    if link:
+                        parsed_links.append({"title": title or link, "link": link})
+            return parsed_links
+    except Exception:
+        return []
+    return []
         
 # --- 🔑 AUTH LOGIC ---
 def verify_password(plain_password, hashed_password):
@@ -750,11 +803,129 @@ async def get_test_results(test_id: int, db: AsyncSession = Depends(get_db), cur
     results = res.scalars().all()
     return [{"student_name": r.student.full_name, "email": r.student.email, "score": r.score, "problems_solved": r.problems_solved, "time_taken": r.time_taken, "submitted_at": r.submitted_at.strftime("%Y-%m-%d %H:%M")} for r in results]
 
+@app.delete("/api/v1/code-tests/{test_id}")
+async def delete_code_test(test_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
+    res = await db.execute(select(models.CodeTest).where(models.CodeTest.id == test_id))
+    test = res.scalars().first()
+    if not test:
+        raise HTTPException(status_code=404, detail="Challenge not found")
+    if test.instructor_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    await db.execute(delete(models.TestResult).where(models.TestResult.test_id == test_id))
+    await db.execute(delete(models.Problem).where(models.Problem.test_id == test_id))
+    await db.execute(delete(models.CodeTest).where(models.CodeTest.id == test_id))
+    await db.commit()
+    return {"message": "Challenge deleted"}
+
+
+def _normalize_judge_text(s: Any) -> str:
+    if s is None:
+        return ""
+    t = str(s).replace("\r\n", "\n").replace("\r", "\n").strip()
+    return t
+
+
+def _pick_output_for_single_line_expected(actual: str, expected: str) -> str:
+    """If expected is one logical line but actual has many (prints + answer), compare the last non-empty line."""
+    a = _normalize_judge_text(actual)
+    e = _normalize_judge_text(expected)
+    if not e or "\n" in e:
+        return a
+    if "\n" in a:
+        lines = [ln.strip() for ln in a.split("\n") if ln.strip() != ""]
+        if lines:
+            return lines[-1]
+    return a
+
+
+def _try_parse_judge_number(s: str) -> Optional[float]:
+    s = s.strip()
+    if s == "":
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _judge_outputs_equal(raw_actual: str, raw_expected: str) -> Tuple[bool, str, str]:
+    """
+    Returns (passed, display_actual, display_expected).
+    Aligns with Code Arena / Pyodide: tolerate extra prints, whitespace, and numeric formatting.
+    """
+    e = _normalize_judge_text(raw_expected)
+    if e == "":
+        return False, _normalize_judge_text(raw_actual), e
+    a = _normalize_judge_text(_pick_output_for_single_line_expected(raw_actual, e))
+    e = _normalize_judge_text(e)
+    if a == e:
+        return True, a, e
+    if " ".join(a.split()) == " ".join(e.split()):
+        return True, a, e
+    na, ne = _try_parse_judge_number(a), _try_parse_judge_number(e)
+    if na is not None and ne is not None:
+        if na == ne or abs(na - ne) < 1e-9:
+            return True, a, e
+    return False, a, e
+
+
+async def _resolve_execute_test_cases(
+    payload: CodePayload, db: AsyncSession, current_user: models.User
+) -> List[Dict[str, Any]]:
+    """Use DB-backed cases for Code Arena when IDs are provided; otherwise trust the client list."""
+    if payload.code_test_id is None or payload.problem_id is None:
+        return payload.test_cases
+
+    prob_res = await db.execute(select(models.Problem).where(models.Problem.id == payload.problem_id))
+    prob = prob_res.scalars().first()
+    if not prob or prob.test_id != payload.code_test_id:
+        raise HTTPException(status_code=400, detail="Invalid problem or code test")
+
+    ct_res = await db.execute(select(models.CodeTest).where(models.CodeTest.id == payload.code_test_id))
+    code_test = ct_res.scalars().first()
+    if not code_test:
+        raise HTTPException(status_code=404, detail="Code test not found")
+
+    if current_user.role == "instructor":
+        if code_test.instructor_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized")
+    elif current_user.role == "student":
+        done = await db.execute(
+            select(models.TestResult).where(
+                models.TestResult.test_id == payload.code_test_id,
+                models.TestResult.user_id == current_user.id,
+            )
+        )
+        if done.scalars().first():
+            raise HTTPException(status_code=403, detail="Test already submitted")
+    else:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    try:
+        cases: List[Dict[str, Any]] = json.loads(prob.test_cases)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Invalid stored test cases")
+
+    if payload.execution_mode == "dry_run":
+        cases = [c for c in cases if not c.get("hidden")]
+    return cases
+
+
 # Judge0 Execution (Async Request) -> Replaced with AWS Lambda Proxy
 @app.post("/api/v1/execute")
-async def execute_code(payload: CodePayload):
+async def execute_code(
+    payload: CodePayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
     if not AWS_LAMBDA_URL:
         raise HTTPException(status_code=500, detail="Compiler Configuration Error (Missing AWS URL)")
+
+    test_cases = await _resolve_execute_test_cases(payload, db, current_user)
+    tc_count = len(test_cases)
+
+    if tc_count == 0:
+        return {"error": "No test cases to run for this request.", "stats": {"passed": 0, "total": 0}, "results": []}
 
     try:
         # 1. Forward to AWS Lambda (The Runner)
@@ -762,59 +933,110 @@ async def execute_code(payload: CodePayload):
         response = requests.post(AWS_LAMBDA_URL, json={
             "source_code": payload.source_code,
             "language_id": payload.language_id,
-            "test_cases": payload.test_cases, 
+            "test_cases": test_cases,
             "stdin": "" 
         }, timeout=15)
         
-        data = response.json()
-        
+        try:
+            data = response.json()
+        except json.JSONDecodeError:
+            return {
+                "error": "Compiler returned invalid JSON.",
+                "stats": {"passed": 0, "total": tc_count},
+                "results": [],
+            }
+
         # Handle AWS API Gateway wrapping
-        if "body" in data:
-            if isinstance(data["body"], str):
-                data = json.loads(data["body"])
+        if isinstance(data, dict) and "body" in data:
+            body = data.get("body")
+            if isinstance(body, str):
+                try:
+                    data = json.loads(body)
+                except json.JSONDecodeError:
+                    return {
+                        "error": "Compiler `body` field is not valid JSON.",
+                        "stats": {"passed": 0, "total": tc_count},
+                        "results": [],
+                    }
             else:
-                data = data["body"]
+                data = body
+
+        # Lambda Function URL often returns a bare JSON string (e.g. "Hello from Lambda!")
+        if isinstance(data, str):
+            return {
+                "error": "Compiler service is not returning the code-runner JSON format (got plain text or a JSON string). The Lambda must return an object with `results` and `stats`.",
+                "detail": data[:400],
+                "stats": {"passed": 0, "total": tc_count},
+                "results": [],
+            }
+
+        if not isinstance(data, dict):
+            return {
+                "error": "Compiler returned an unexpected response type.",
+                "stats": {"passed": 0, "total": tc_count},
+                "results": [],
+            }
 
         # --- 🛡️ THE FIX: BACKEND VERIFICATION LAYER ---
         # The Lambda runs the code, but we (the Backend) will GRADE it.
         # This fixes the issue where Java/C "passes" without actually matching the output.
-        
-        if "results" in data and isinstance(data["results"], list):
-            passed_count = 0
-            
-            for res in data["results"]:
-                # 1. Get the Raw Output safely
-                raw_actual = str(res.get("actual", ""))
-                raw_expected = str(res.get("expected", ""))
 
-                # 2. CLEAN UP (The "Normalization" Step)
-                # Java/C often adds extra newlines (\n) or spaces. We strip them.
-                clean_actual = raw_actual.strip()
-                clean_expected = raw_expected.strip()
+        results_list = data.get("results")
+        if not isinstance(results_list, list):
+            results_list = []
 
-                # Update the result so Frontend sees clean data
-                res["actual"] = clean_actual 
+        if len(results_list) == 0:
+            return {
+                "error": data.get("error")
+                or "Compiler did not return a `results` array. Update the Lambda to return one entry per test case with `input`, `expected`, `actual`, and optional `status`.",
+                "stats": {"passed": 0, "total": tc_count},
+                "results": [],
+            }
 
-                # 3. RE-GRADE: Explicitly check if they match
-                if clean_actual == clean_expected and clean_expected != "":
-                    res["status"] = "Passed"
-                    passed_count += 1
-                else:
-                    res["status"] = "Failed" 
-                    # If the output is empty or mismatch, it FAILS.
-            
-            # 4. Update the Summary Stats
-            # This overwrites whatever "Passed" count the Lambda claimed.
-            if "stats" in data:
-                data["stats"]["passed"] = passed_count
+        passed_count = 0
+
+        for i, res in enumerate(results_list):
+            if not isinstance(res, dict):
+                continue
+            rid = res.get("id")
+            idx = rid if isinstance(rid, int) and 0 <= rid < len(test_cases) else i
+            if idx < 0 or idx >= len(test_cases):
+                idx = i if i < len(test_cases) else len(test_cases) - 1
+            tc = test_cases[idx] if isinstance(test_cases[idx], dict) else {}
+
+            # DB / Code Arena store expected value as "output"; Lambda often leaves "expected" blank.
+            canon_expected = tc.get("expected", tc.get("output", ""))
+            canon_input = tc.get("input", tc.get("stdin", ""))
+
+            raw_actual = str(res.get("actual", ""))
+            raw_expected = str(res.get("expected", res.get("output", "")))
+            if not raw_expected.strip() and canon_expected is not None and str(canon_expected).strip():
+                raw_expected = str(canon_expected)
+            if not str(res.get("input", res.get("stdin", ""))).strip() and str(canon_input).strip():
+                res["input"] = canon_input
+
+            # 2–3. RE-GRADE with same rules as local Pyodide (multi-line stdout, whitespace, numbers)
+            ok, disp_a, disp_e = _judge_outputs_equal(raw_actual, raw_expected)
+            res["actual"] = disp_a
+            res["expected"] = disp_e
+            if ok:
+                res["status"] = "Passed"
+                passed_count += 1
+            else:
+                res["status"] = "Failed"
+
+        data["results"] = results_list
+        data.setdefault("stats", {})
+        data["stats"]["passed"] = passed_count
+        data["stats"]["total"] = tc_count
 
         return data
 
     except requests.exceptions.Timeout:
-        return {"error": "Execution Timed Out (Server Limit)"}
+        return {"error": "Execution Timed Out (Server Limit)", "stats": {"passed": 0, "total": tc_count}, "results": []}
     except Exception as e:
         print(f"AWS Error: {e}")
-        return {"error": "Compiler Service Unavailable"}
+        return {"error": "Compiler Service Unavailable", "stats": {"passed": 0, "total": tc_count}, "results": []}
 @app.get("/api/v1/courses")
 async def get_courses(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if current_user.role == "instructor":
@@ -880,6 +1102,7 @@ async def get_modules(course_id: int, db: AsyncSession = Depends(get_db)):
 
 @app.post("/api/v1/content")
 async def add_content(content: ContentCreate, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
+    cleaned_resource_links = normalize_resource_links(content.resource_links)
     new_content = models.ContentItem(
         title=content.title, 
         type=content.type, 
@@ -890,6 +1113,7 @@ async def add_content(content: ContentCreate, db: AsyncSession = Depends(get_db)
         is_mandatory=content.is_mandatory, 
         instructions=content.instructions, 
         test_config=content.test_config,
+        resource_links=json.dumps(cleaned_resource_links) if cleaned_resource_links else None,
         # ✅ Save Times
         start_time=content.start_time,
         end_time=content.end_time
@@ -906,6 +1130,239 @@ async def publish_course(course_id: int, db: AsyncSession = Depends(get_db), cur
         course.is_published = True
         await db.commit()
     return {"message": "Published"}
+
+@app.get("/api/v1/library/items")
+async def list_library_items(
+    q: Optional[str] = None,
+    content_type: Optional[str] = None,
+    course_id: Optional[int] = None,
+    course_name: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor)
+):
+    query = (
+        select(models.ContentItem, models.Module, models.Course, models.User)
+        .join(models.Module, models.ContentItem.module_id == models.Module.id)
+        .join(models.Course, models.Module.course_id == models.Course.id)
+        .join(models.User, models.Course.instructor_id == models.User.id)
+    )
+
+    if q:
+        search_text = f"%{q.strip()}%"
+        query = query.where(
+            (models.ContentItem.title.ilike(search_text))
+            | (models.Module.title.ilike(search_text))
+            | (models.Course.title.ilike(search_text))
+            | (models.User.full_name.ilike(search_text))
+            | (models.User.email.ilike(search_text))
+        )
+
+    if content_type and content_type != "all":
+        query = query.where(models.ContentItem.type == content_type)
+
+    if course_id is not None:
+        query = query.where(models.Course.id == course_id)
+
+    if course_name:
+        course_text = f"%{course_name.strip()}%"
+        query = query.where(models.Course.title.ilike(course_text))
+
+    query = query.order_by(models.ContentItem.id.desc()).limit(500)
+    result = await db.execute(query)
+    rows = result.all()
+
+    return [
+        {
+            "id": item.id,
+            "title": item.title,
+            "type": item.type,
+            "url": item.content,
+            "duration": item.duration,
+            "is_mandatory": item.is_mandatory,
+            "instructions": item.instructions,
+            "test_config": item.test_config,
+            "start_time": item.start_time,
+            "end_time": item.end_time,
+            "resource_links": parse_resource_links(item.resource_links),
+            "module_id": module.id,
+            "module_title": module.title,
+            "course_id": course.id,
+            "course_title": course.title,
+            "instructor_id": instructor.id,
+            "instructor_name": instructor.full_name or instructor.email,
+        }
+        for item, module, course, instructor in rows
+    ]
+
+@app.get("/api/v1/library/courses")
+async def list_library_courses(
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor)
+):
+    result = await db.execute(
+        select(models.Course.id, models.Course.title)
+        .join(models.Module, models.Module.course_id == models.Course.id)
+        .join(models.ContentItem, models.ContentItem.module_id == models.Module.id)
+        .group_by(models.Course.id, models.Course.title)
+        .order_by(models.Course.title.asc())
+    )
+    rows = result.all()
+    return [{"id": row[0], "title": row[1]} for row in rows]
+
+@app.get("/api/v1/library/course-modules")
+async def list_course_modules_for_library(
+    course_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor)
+):
+    res = await db.execute(
+        select(models.Module)
+        .options(selectinload(models.Module.items))
+        .where(models.Module.course_id == course_id)
+        .order_by(models.Module.order, models.Module.id)
+    )
+    modules = res.scalars().all()
+    return [
+        {
+            "id": module.id,
+            "title": module.title,
+            "order": module.order,
+            "lesson_count": len(module.items or []),
+        }
+        for module in modules
+    ]
+
+@app.post("/api/v1/library/add-to-module")
+async def add_items_from_library(
+    payload: LibraryBulkAddRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor)
+):
+    target_mod_res = await db.execute(
+        select(models.Module, models.Course)
+        .join(models.Course, models.Module.course_id == models.Course.id)
+        .where(models.Module.id == payload.module_id)
+    )
+    target_pair = target_mod_res.first()
+    if not target_pair:
+        raise HTTPException(status_code=404, detail="Target module not found")
+
+    target_module, target_course = target_pair
+    if target_course.instructor_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can add library items only to your own course module")
+
+    item_ids = [item_id for item_id in payload.item_ids if isinstance(item_id, int)]
+    if not item_ids:
+        raise HTTPException(status_code=400, detail="No library items selected")
+
+    src_items_res = await db.execute(select(models.ContentItem).where(models.ContentItem.id.in_(item_ids)))
+    src_items = src_items_res.scalars().all()
+    src_items_map = {item.id: item for item in src_items}
+
+    ordered_source_items = [src_items_map[item_id] for item_id in item_ids if item_id in src_items_map]
+    if not ordered_source_items:
+        raise HTTPException(status_code=404, detail="Selected library items were not found")
+
+    max_order_res = await db.execute(
+        select(func.max(models.ContentItem.order)).where(models.ContentItem.module_id == payload.module_id)
+    )
+    max_order = max_order_res.scalar()
+    next_order = (max_order + 1) if max_order is not None else 0
+
+    created_items = []
+    for src in ordered_source_items:
+        cloned = models.ContentItem(
+            title=src.title,
+            type=src.type,
+            content=src.content,
+            duration=src.duration,
+            is_mandatory=src.is_mandatory,
+            instructions=src.instructions,
+            test_config=src.test_config,
+            resource_links=src.resource_links,
+            start_time=src.start_time,
+            end_time=src.end_time,
+            order=next_order,
+            module_id=payload.module_id,
+        )
+        next_order += 1
+        db.add(cloned)
+        created_items.append(cloned)
+
+    await db.commit()
+    return {"message": "Library items added", "count": len(created_items)}
+
+@app.post("/api/v1/library/import-modules")
+async def import_modules_from_library(
+    payload: LibraryImportModulesRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor)
+):
+    target_course_res = await db.execute(select(models.Course).where(models.Course.id == payload.target_course_id))
+    target_course = target_course_res.scalars().first()
+    if not target_course:
+        raise HTTPException(status_code=404, detail="Target course not found")
+    if target_course.instructor_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can import modules only into your own course")
+
+    module_ids = [module_id for module_id in payload.module_ids if isinstance(module_id, int)]
+    if not module_ids:
+        raise HTTPException(status_code=400, detail="No modules selected")
+
+    src_res = await db.execute(
+        select(models.Module)
+        .options(selectinload(models.Module.items))
+        .where(models.Module.id.in_(module_ids))
+    )
+    src_modules = src_res.scalars().all()
+    src_map = {module.id: module for module in src_modules}
+    ordered_src_modules = [src_map[module_id] for module_id in module_ids if module_id in src_map]
+    if not ordered_src_modules:
+        raise HTTPException(status_code=404, detail="Selected source modules were not found")
+
+    max_order_res = await db.execute(select(func.max(models.Module.order)).where(models.Module.course_id == payload.target_course_id))
+    max_order = max_order_res.scalar()
+    next_module_order = (max_order + 1) if max_order is not None else 0
+
+    imported_modules = 0
+    for src_module in ordered_src_modules:
+        new_module = models.Module(
+            title=src_module.title,
+            order=next_module_order,
+            course_id=payload.target_course_id
+        )
+        next_module_order += 1
+        db.add(new_module)
+        await db.flush()
+
+        sorted_items = sorted(
+            src_module.items or [],
+            key=lambda item: (
+                item.order is None,
+                item.order if item.order is not None else 10**9,
+                item.id
+            )
+        )
+        for idx, src_item in enumerate(sorted_items):
+            new_item = models.ContentItem(
+                title=src_item.title,
+                type=src_item.type,
+                content=src_item.content,
+                duration=src_item.duration,
+                is_mandatory=src_item.is_mandatory,
+                instructions=src_item.instructions,
+                test_config=src_item.test_config,
+                resource_links=src_item.resource_links,
+                start_time=src_item.start_time,
+                end_time=src_item.end_time,
+                order=idx,
+                module_id=new_module.id,
+            )
+            db.add(new_item)
+        imported_modules += 1
+
+    await db.commit()
+    return {"message": "Modules imported from library", "count": imported_modules}
 
 @app.patch("/api/v1/courses/{course_id}/details")
 async def update_course_details(
@@ -972,15 +1429,18 @@ async def get_course_player(course_id: int, db: AsyncSession = Depends(get_db), 
             {
                 "id": m.id, 
                 "title": m.title, 
+                "order": m.order,
                 "is_completed": any(item.type == 'assignment' and item.id in completed_ids for item in m.items),
                 "lessons": [
                     {
                         "id": c.id, 
                         "title": c.title, 
+                        "order": c.order,
                         "type": c.type, 
                         "url": c.content, 
                         "test_config": c.test_config, 
                         "instructions": c.instructions, 
+                        "resource_links": parse_resource_links(c.resource_links),
                         "duration": c.duration, 
                         "is_mandatory": c.is_mandatory, 
                         "is_completed": c.id in completed_ids, 
@@ -991,9 +1451,23 @@ async def get_course_player(course_id: int, db: AsyncSession = Depends(get_db), 
                         "is_terminated": progress_map.get(c.id).is_terminated if c.id in progress_map else False,
                         "violation_count": progress_map.get(c.id).violation_count if c.id in progress_map else 0
                         
-                    } for c in m.items
+                    } for c in sorted(
+                        m.items,
+                        key=lambda item: (
+                            item.order is None,
+                            item.order if item.order is not None else 10**9,
+                            item.id
+                        )
+                    )
                 ]
-            } for m in course.modules
+            } for m in sorted(
+                course.modules,
+                key=lambda module: (
+                    module.order is None,
+                    module.order if module.order is not None else 10**9,
+                    module.id
+                )
+            )
         ]
     }
 
@@ -1134,6 +1608,9 @@ async def update_content(content_id: int, update: ContentUpdate, db: AsyncSessio
     if item: 
         if update.title: item.title = update.title
         if update.url: item.content = update.url
+        if update.resource_links is not None:
+            cleaned_resource_links = normalize_resource_links(update.resource_links)
+            item.resource_links = json.dumps(cleaned_resource_links) if cleaned_resource_links else None
         await db.commit()
         return {"message": "Updated"}
     raise HTTPException(status_code=404)
@@ -1537,38 +2014,6 @@ async def verify_assignment(submission_id: int, db: AsyncSession = Depends(get_d
     # ✅ Removed certificate logic.
     return {"message": "Verified"}
 
-@app.post("/api/v1/execute")
-async def execute_code(payload: CodePayload):
-    if not AWS_LAMBDA_URL:
-        raise HTTPException(status_code=500, detail="Compiler Configuration Error (Missing AWS URL)")
-
-    try:
-        # 1. Forward the request to AWS Lambda
-        # We allow a longer timeout (10s) because Java/C++ compilation takes time
-        response = requests.post(AWS_LAMBDA_URL, json={
-            "source_code": payload.source_code,
-            "language_id": payload.language_id,
-            "test_cases": payload.test_cases, 
-            "stdin": "" 
-        }, timeout=10)
-        
-        # 2. Parse AWS Response
-        # API Gateway sometimes wraps the response in a "body" string
-        data = response.json()
-        
-        if "body" in data:
-            if isinstance(data["body"], str):
-                return json.loads(data["body"])
-            return data["body"]
-            
-        return data
-
-    except requests.exceptions.Timeout:
-        return {"error": "Execution Timed Out (Server Limit)"}
-    except Exception as e:
-        print(f"AWS Error: {e}")
-        return {"error": "Compiler Service Unavailable"}
-    
 # 1. Toggle Item Completion (The Green Tick)
 @app.post("/api/v1/content/{item_id}/complete")
 async def mark_item_complete(item_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(get_current_user)):

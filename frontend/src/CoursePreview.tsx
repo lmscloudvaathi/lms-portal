@@ -17,6 +17,7 @@ interface ContentItem {
   type: string;
   url: string;
   order: number;
+  resource_links?: { title: string; link: string }[];
 }
 interface Module {
   id: number;
@@ -36,6 +37,7 @@ const CoursePreview = () => {
   const [editingItem, setEditingItem] = useState<any>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editUrl, setEditUrl] = useState("");
+  const [editResourceLinks, setEditResourceLinks] = useState<{ title: string; link: string }[]>([{ title: "", link: "" }]);
 
   // Editing Module State
   const [editingModuleId, setEditingModuleId] = useState<number | null>(null);
@@ -110,17 +112,66 @@ const CoursePreview = () => {
     } catch (err) { triggerToast("Failed to delete item.", "error"); }
   };
 
-  const handleEditItemStart = (item: any) => { setEditingItem(item); setEditTitle(item.title); setEditUrl(item.url); };
+  const getResourceLinksForEdit = (item: any): { title: string; link: string }[] => {
+    const links = Array.isArray(item?.resource_links) ? item.resource_links : [];
+    const normalized = links
+      .map((resource: any) => ({
+        title: String(resource?.title || "").trim(),
+        link: String(resource?.link || "").trim(),
+      }))
+      .filter((resource: { title: string; link: string }) => resource.title && resource.link);
+    return normalized.length ? normalized : [{ title: "", link: "" }];
+  };
+
+  const handleEditItemStart = (item: any) => {
+    setEditingItem(item);
+    setEditTitle(item.title);
+    setEditUrl(item.url);
+    setEditResourceLinks(getResourceLinksForEdit(item));
+  };
+
+  const updateEditResourceLink = (index: number, field: "title" | "link", value: string) => {
+    setEditResourceLinks(prev => prev.map((resource, idx) => (idx === index ? { ...resource, [field]: value } : resource)));
+  };
+
+  const addEditResourceLink = () => {
+    setEditResourceLinks(prev => [...prev, { title: "", link: "" }]);
+  };
+
+  const removeEditResourceLink = (index: number) => {
+    setEditResourceLinks(prev => {
+      const next = prev.filter((_, idx) => idx !== index);
+      return next.length ? next : [{ title: "", link: "" }];
+    });
+  };
+
   const handleEditItemSave = async () => {
     if (!editingItem) return;
     try {
       const token = localStorage.getItem("token");
-      await axios.patch(`${API_BASE_URL}/content/${editingItem.id}`, { title: editTitle, url: editUrl }, { headers: { Authorization: `Bearer ${token}` } });
+      const payload: any = { title: editTitle, url: editUrl };
+      if (editingItem.type === "video") {
+        payload.resource_links = editResourceLinks
+          .map(resource => ({ title: resource.title.trim(), link: resource.link.trim() }))
+          .filter(resource => resource.title && resource.link);
+      }
+      await axios.patch(`${API_BASE_URL}/content/${editingItem.id}`, payload, { headers: { Authorization: `Bearer ${token}` } });
 
       // Update local state
       const updatedModules = modules.map(m => ({
         ...m,
-        lessons: m.lessons.map(l => l.id === editingItem.id ? { ...l, title: editTitle, url: editUrl } : l)
+        lessons: m.lessons.map(l => l.id === editingItem.id
+          ? {
+            ...l,
+            title: editTitle,
+            url: editUrl,
+            resource_links: editingItem.type === "video"
+              ? editResourceLinks
+                .map(resource => ({ title: resource.title.trim(), link: resource.link.trim() }))
+                .filter(resource => resource.title && resource.link)
+              : l.resource_links
+          }
+          : l)
       }));
       setModules(updatedModules);
 
@@ -237,6 +288,16 @@ const CoursePreview = () => {
     }
   };
 
+  const getNormalizedResourceLinks = (lesson: any): { title: string; link: string }[] => {
+    const raw = Array.isArray(lesson?.resource_links) ? lesson.resource_links : [];
+    return raw
+      .map((resource: any) => ({
+        title: String(resource?.title || resource?.link || "").trim(),
+        link: String(resource?.link || resource?.url || "").trim(),
+      }))
+      .filter((resource: { title: string; link: string }) => resource.title && resource.link);
+  };
+
   if (loading) return <div style={{ padding: "40px", color: brand.textLight }}>Loading content...</div>;
   if (!course) return <div style={{ padding: "40px", color: brand.textLight }}>Course not found.</div>;
 
@@ -308,8 +369,13 @@ const CoursePreview = () => {
                           ) : (
                             <div className="flex items-center gap-3 overflow-hidden">
                               <h3 className="text-base md:text-lg font-bold text-[#1e293b] truncate">{module.title}</h3>
-                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button onClick={(e) => handleEditModuleStart(module, e)} className="p-1.5 text-slate-400 hover:text-[#005EB8] hover:bg-blue-50 rounded-md transition-colors"><Edit2 size={14} /></button>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={(e) => handleEditModuleStart(module, e)}
+                                  className="px-2 py-1 text-xs font-bold text-[#005EB8] border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
+                                >
+                                  Rename
+                                </button>
                                 <button
                                   onClick={(e) => handleDeleteModule(module.id, e)}
                                   className={`p-1.5 rounded-md transition-colors flex items-center gap-1 ${deleteConfirmId?.id === module.id && deleteConfirmId.type === 'module' ? "text-red-600 bg-red-50 font-bold text-xs" : "text-slate-400 hover:text-red-500 hover:bg-red-50"}`}
@@ -344,6 +410,9 @@ const CoursePreview = () => {
                                         className={`flex items-center justify-between p-3 md:p-4 border-b border-slate-100 last:border-none rounded-lg mb-2 transition-all ${snapshot.isDragging ? "bg-blue-50 shadow-md ring-2 ring-blue-200" : "bg-white hover:bg-slate-50"}`}
                                         style={provided.draggableProps.style}
                                       >
+                                        {(() => {
+                                          const resourceLinks = getNormalizedResourceLinks(lesson);
+                                          return (
                                         <div className="flex items-center gap-3 md:gap-4 flex-1 min-w-0">
                                           {/* Drag Handle */}
                                           <div {...provided.dragHandleProps} className="cursor-grab text-slate-300 hover:text-slate-500 transition-colors">
@@ -360,8 +429,28 @@ const CoursePreview = () => {
                                               <span className="w-1 h-1 bg-slate-300 rounded-full"></span>
                                               <span className="truncate">{lesson.url || "No Link"}</span>
                                             </div>
+                                            {lesson.type === "video" && resourceLinks.length > 0 && (
+                                              <div className="mt-2 space-y-1">
+                                                {resourceLinks.map((resource, resourceIdx) => (
+                                                  <div key={`${lesson.id}-resource-${resourceIdx}`} className="text-[11px] text-slate-600">
+                                                    <span className="font-semibold">{resource.title}</span>:{" "}
+                                                    <a
+                                                      href={resource.link}
+                                                      target="_blank"
+                                                      rel="noopener noreferrer"
+                                                      className="text-[#005EB8] hover:underline break-all"
+                                                      onClick={(e) => e.stopPropagation()}
+                                                    >
+                                                      {resource.link}
+                                                    </a>
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            )}
                                           </div>
                                         </div>
+                                          );
+                                        })()}
 
                                         <div className="flex items-center gap-2">
                                           <button onClick={() => handleEditItemStart(lesson)} className="p-2 border border-slate-200 rounded-lg bg-white text-slate-400 hover:text-[#005EB8] hover:border-[#005EB8] hover:bg-blue-50 transition-all shadow-sm" title="Edit Details">
@@ -399,7 +488,7 @@ const CoursePreview = () => {
       {/* EDIT ITEM MODAL */}
       {editingItem && (
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(15, 23, 42, 0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, backdropFilter: "blur(4px)" }}>
-          <div style={{ background: brand.cardBg, padding: "30px", borderRadius: "16px", width: "400px", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)" }}>
+          <div style={{ background: brand.cardBg, padding: "30px", borderRadius: "16px", width: "560px", maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)" }}>
             <h3 style={{ marginTop: 0, color: brand.textMain, fontWeight: "800", fontSize: "18px" }}>Edit Content</h3>
             <div style={{ marginBottom: "15px" }}>
               <label style={{ display: "block", fontSize: "12px", fontWeight: "700", marginBottom: "5px", color: brand.textLight, textTransform: "uppercase" }}>Title</label>
@@ -409,6 +498,47 @@ const CoursePreview = () => {
               <label style={{ display: "block", fontSize: "12px", fontWeight: "700", marginBottom: "5px", color: brand.textLight, textTransform: "uppercase" }}>URL / Content Link</label>
               <input value={editUrl} onChange={e => setEditUrl(e.target.value)} style={{ width: "100%", padding: "10px", borderRadius: "8px", border: `1px solid ${brand.border}`, outline: "none", color: brand.textMain }} />
             </div>
+            {editingItem.type === "video" && (
+              <div style={{ marginBottom: "20px" }}>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "700", marginBottom: "8px", color: brand.textLight, textTransform: "uppercase" }}>
+                  Resource Links (Optional)
+                </label>
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  {editResourceLinks.map((resource, index) => (
+                    <div key={index} style={{ display: "flex", gap: "8px" }}>
+                      <input
+                        value={resource.title}
+                        onChange={(e) => updateEditResourceLink(index, "title", e.target.value)}
+                        placeholder="Resource title"
+                        style={{ flex: 1, padding: "10px", borderRadius: "8px", border: `1px solid ${brand.border}`, outline: "none", color: brand.textMain }}
+                      />
+                      <input
+                        value={resource.link}
+                        onChange={(e) => updateEditResourceLink(index, "link", e.target.value)}
+                        placeholder="https://resource-link..."
+                        style={{ flex: 1, padding: "10px", borderRadius: "8px", border: `1px solid ${brand.border}`, outline: "none", color: brand.textMain }}
+                      />
+                      {editResourceLinks.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeEditResourceLink(index)}
+                          style={{ border: "none", background: "#fee2e2", color: "#dc2626", borderRadius: "8px", padding: "0 10px", cursor: "pointer", fontWeight: 700 }}
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={addEditResourceLink}
+                  style={{ marginTop: "10px", border: "none", background: "none", color: brand.blue, fontWeight: 700, cursor: "pointer" }}
+                >
+                  + Add Another Resource Link
+                </button>
+              </div>
+            )}
             <div style={{ display: "flex", gap: "10px" }}>
               <button onClick={handleEditItemSave} style={{ flex: 1, padding: "10px", background: brand.blue, color: "white", border: "none", borderRadius: "8px", fontWeight: "700", cursor: "pointer" }}>Save Changes</button>
               <button onClick={() => setEditingItem(null)} style={{ flex: 1, padding: "10px", background: "white", color: brand.textLight, border: `1px solid ${brand.border}`, borderRadius: "8px", fontWeight: "700", cursor: "pointer" }}>Cancel</button>

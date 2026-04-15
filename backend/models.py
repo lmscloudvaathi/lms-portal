@@ -58,6 +58,8 @@ class ContentItem(Base):
     
     instructions = Column(Text, nullable=True) 
     test_config = Column(Text, nullable=True) 
+    # Optional JSON string list of resource URLs for video lessons.
+    resource_links = Column(Text, nullable=True)
     
     # ✅ NEW FIELDS FOR LIVE TEST SCHEDULING
     start_time = Column(DateTime, nullable=True) # e.g., 2023-10-27 20:00:00

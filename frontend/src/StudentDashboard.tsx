@@ -493,11 +493,15 @@ const StudentDashboard = () => {
             return;
         }
 
+        // Dry-run uses only non-hidden cases (official grading still uses full suite on submit)
+        const dryRunCases = allCases.filter((c) => !c.hidden);
+        const casesForDryRun = dryRunCases.length > 0 ? dryRunCases : allCases;
+
         // 🟢 CASE 1: PYTHON (Run Locally with Strict Test Cases)
         if (language === 71) {
             setConsoleOutput("🔹 Running Local Tests (Pyodide)...");
             // Use the strict test runner
-            const localRes = await runTestCasesLocally(userCode, allCases);
+            const localRes = await runTestCasesLocally(userCode, casesForDryRun);
 
             if (localRes.success) {
                 setExecutionStatus("success");
@@ -512,7 +516,13 @@ const StudentDashboard = () => {
             return; // Stop here
         }
 
-        // 🔴 CASE 2: C++ / JAVA (Run on Server - Dry Run with ALL Test Cases)
+        if (!activeTest || !currentProb) {
+            setExecutionStatus("error");
+            setConsoleOutput("⚠️ Missing problem data.");
+            return;
+        }
+
+        // 🔴 CASE 2: C++ / JAVA (Run on Server — dry run uses server-resolved public cases when possible)
         setConsoleOutput("🚀 specific language test on Server...");
 
         try {
@@ -520,35 +530,54 @@ const StudentDashboard = () => {
                 {
                     source_code: userCode,
                     language_id: language,
-                    test_cases: allCases // Send ALL cases for verification
+                    test_cases: [],
+                    code_test_id: activeTest.id,
+                    problem_id: currentProb.id,
+                    execution_mode: "dry_run",
                 },
                 { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } }
             );
 
             const report = res.data;
+            if (typeof report === "string") {
+                setExecutionStatus("error");
+                setConsoleOutput(`❌ Server Error:\n${report}`);
+                return;
+            }
             if (report.error) {
                 setExecutionStatus("error");
-                setConsoleOutput(`❌ Server Error: ${report.error}`);
+                const hint = report.detail ? `\n\nDetail: ${report.detail}` : "";
+                setConsoleOutput(`❌ Server Error: ${report.error}${hint}`);
                 return;
             }
 
             // Check if passed/failed matching consistent strict logic
-            const passed = report.stats?.passed || 0;
-            const total = report.stats?.total || 0;
+            const passed = report.stats?.passed ?? 0;
+            const total = report.stats?.total ?? 0;
 
-            let outputStr = `✨ Dry Run Complete!\nPassed: ${passed}/${total}\nRuntime: ${report.stats?.runtime_ms}ms\n\n`;
+            if (total === 0) {
+                setExecutionStatus("error");
+                setConsoleOutput(
+                    "❌ Compiler returned no usable test summary (0/0).\n\n" +
+                    "Ensure your Lambda returns JSON with `results` and `stats` for each run."
+                );
+                return;
+            }
+
+            let outputStr = `✨ Dry Run Complete!\nPassed: ${passed}/${total}\nRuntime: ${report.stats?.runtime_ms ?? "—"}ms\n\n`;
 
             // Append Details
             (report.results || []).forEach((r: any) => {
-                outputStr += `${r.status === "Passed" ? "✅" : "❌"} Case ${r.id + 1}: ${r.status}\n`;
+                const idx = typeof r?.id === "number" ? r.id + 1 : "?";
+                outputStr += `${r.status === "Passed" ? "✅" : "❌"} Case ${idx}: ${r.status}\n`;
                 if (r.status !== "Passed") {
-                    outputStr += `   Input: ${r.input}\n   Expected: ${r.expected}\n   Actual: ${r.actual}\n\n`;
+                    outputStr += `   Input: ${r.input ?? r.stdin}\n   Expected: ${r.expected ?? r.output}\n   Actual: ${r.actual}\n\n`;
                 }
             });
 
             setConsoleOutput(outputStr);
 
-            if (total > 0 && passed === total) {
+            if (passed === total) {
                 setExecutionStatus("success");
                 triggerToast("All Tests Passed!", "success");
                 setCanSubmit(true); // ✅ Unlock Submit
@@ -574,45 +603,72 @@ const StudentDashboard = () => {
         setConsoleOutput("🚀 Submitting to Official Grader...");
 
         const currentProb = activeTest?.problems[currentProblemIndex];
+        if (!activeTest || !currentProb) {
+            triggerToast("No active problem.", "error");
+            return;
+        }
 
         try {
-            const allCases = currentProb ? JSON.parse(currentProb.test_cases) : [];
-
-            // ALWAYS send to AWS for submission
+            // Grading uses canonical cases from the backend (includes hidden tests)
             const res = await axios.post(`${API_BASE_URL}/execute`,
                 {
                     source_code: userCode,
                     language_id: language,
-                    test_cases: allCases
+                    test_cases: [],
+                    code_test_id: activeTest.id,
+                    problem_id: currentProb.id,
                 },
                 { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } }
             );
 
             const report = res.data;
 
+            if (typeof report === "string") {
+                setExecutionStatus("error");
+                setConsoleOutput(`❌ SERVER ERROR:\n${report}`);
+                triggerToast("Compiler returned invalid response", "error");
+                return;
+            }
+
             if (report.error) {
                 setExecutionStatus("error");
-                setConsoleOutput(`❌ SERVER ERROR:\n${report.error}`);
+                const hint = report.detail ? `\n\nDetail: ${report.detail}` : "";
+                setConsoleOutput(`❌ SERVER ERROR:\n${report.error}${hint}`);
+                triggerToast("Compiler error", "error");
                 return;
             }
 
             // Check PASS/FAIL logic
-            const passedCount = report.stats?.passed || 0;
-            const totalCount = report.stats?.total || 0;
+            const passedCount = report.stats?.passed ?? 0;
+            const totalCount = report.stats?.total ?? 0;
+
+            if (totalCount === 0) {
+                setExecutionStatus("error");
+                setConsoleOutput(
+                    "❌ The compiler did not report any test results (0/0).\n\n" +
+                    "Your Lambda must return JSON like: { \"stats\": { \"passed\": n, \"total\": n, \"runtime_ms\": n }, \"results\": [ { \"input\", \"expected\", \"actual\", \"status\" } ] }.\n" +
+                    "A plain string response (e.g. \"Hello from Lambda!\") will not work for Code Arena."
+                );
+                triggerToast("Invalid compiler response", "error");
+                return;
+            }
 
             // 🚨 STRICT SUCCESS VALIDATION
-            if (totalCount > 0 && passedCount === totalCount) {
+            if (passedCount === totalCount) {
                 setExecutionStatus("success");
-                setConsoleOutput(`🎉 Challenge Solved! All ${report.stats.total} test cases passed.\n\nRuntime: ${report.stats.runtime_ms}ms`);
+                setConsoleOutput(`🎉 Challenge Solved! All ${totalCount} test cases passed.\n\nRuntime: ${report.stats?.runtime_ms ?? "—"}ms`);
                 triggerToast("🎉 Challenge Solved!", "success");
 
                 // ✅ ONLY SAVE PROGRESS HERE
                 handleSave();
             } else {
                 setExecutionStatus("error");
-                const fail = report.results?.find((r: any) => r.status !== "Passed");
-                setConsoleOutput(`❌ Hidden Test Cases Failed (${passedCount}/${totalCount} Passed)\n\nFirst Failure:\nInput: ${fail?.input}\nExpected: ${fail?.expected}\nActual: ${fail?.actual}`);
-                triggerToast("❌ Hidden Test Cases Failed", "error");
+                const fail = (report.results as any[])?.find((r: any) => r && r.status !== "Passed");
+                const fin = fail?.input ?? fail?.stdin ?? "(hidden or n/a)";
+                const fexp = fail?.expected ?? fail?.output ?? "(n/a)";
+                const fact = fail?.actual ?? "(n/a)";
+                setConsoleOutput(`❌ Test cases failed (${passedCount}/${totalCount} passed).\n\nFirst failure:\nInput: ${fin}\nExpected: ${fexp}\nActual: ${fact}`);
+                triggerToast("Some tests failed", "error");
             }
         } catch (err: any) {
             setExecutionStatus("error");
@@ -771,7 +827,7 @@ const StudentDashboard = () => {
                         <p className="text-slate-500 mb-6 italic">No description provided.</p>
                         {activeTest.problems[currentProblemIndex]?.description && <div className="prose prose-sm text-slate-600 mb-6">{activeTest.problems[currentProblemIndex].description}</div>}
                         <h4 className="font-extrabold text-slate-900 mb-4 text-xs lg:text-sm uppercase tracking-wide">TEST CASES</h4>
-                        <div className="space-y-2">{JSON.parse(activeTest.problems[currentProblemIndex]?.test_cases || "[]").map((tc: any, i: number) => (<div key={i} className="bg-slate-50 border border-slate-200 p-2 lg:p-3 rounded text-xs lg:text-sm"><span className="font-mono font-bold block">Input: {tc.input}</span></div>))}</div>
+                        <div className="space-y-2">{JSON.parse(activeTest.problems[currentProblemIndex]?.test_cases || "[]").filter((tc: any) => !tc.hidden).map((tc: any, i: number) => (<div key={i} className="bg-slate-50 border border-slate-200 p-2 lg:p-3 rounded text-xs lg:text-sm"><span className="font-mono font-bold block">Input: {tc.input}</span></div>))}</div>
                     </div>
 
                     {/* Camera View - Smaller on Mobile */}

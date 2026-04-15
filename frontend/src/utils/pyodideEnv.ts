@@ -88,6 +88,45 @@ def run_tests(user_code, test_cases_json):
         test_cases = json.loads(testCasesJson)
         total_count = len(test_cases)
 
+        def _norm(s):
+            if s is None:
+                return ""
+            return str(s).replace("\\r\\n", "\\n").replace("\\r", "\\n").strip()
+
+        def _pick_line(actual, exp):
+            a, e = _norm(actual), _norm(exp)
+            if not e or "\\n" in e:
+                return a
+            if "\\n" in a:
+                lines = [ln.strip() for ln in a.split("\\n") if ln.strip() != ""]
+                if lines:
+                    return lines[-1]
+            return a
+
+        def _num(s):
+            s = str(s).strip()
+            if s == "":
+                return None
+            try:
+                return float(s)
+            except ValueError:
+                return None
+
+        def _judge_ok(raw_a, raw_e):
+            e = _norm(raw_e)
+            if e == "":
+                return False, _norm(raw_a), e
+            a = _norm(_pick_line(raw_a, e))
+            e = _norm(e)
+            if a == e:
+                return True, a, e
+            if " ".join(a.split()) == " ".join(e.split()):
+                return True, a, e
+            na, ne = _num(a), _num(e)
+            if na is not None and ne is not None and (na == ne or abs(na - ne) < 1e-9):
+                return True, a, e
+            return False, a, e
+
         for i, tc in enumerate(test_cases):
             inp = tc.get('input', '')
             exp = tc.get('output', '') # Expected output
@@ -97,9 +136,7 @@ def run_tests(user_code, test_cases_json):
                 # We assume input is string. If user needs int, they cast it inside 'solve'
                 actual = solve(inp)
                 
-                # Compare (String comparison for safety)
-                # Convert both to string and strip whitespace
-                is_passed = str(actual).strip() == str(exp).strip()
+                is_passed, disp_a, disp_e = _judge_ok(str(actual), str(exp))
                 
                 if is_passed:
                     passed_count += 1
@@ -108,8 +145,8 @@ def run_tests(user_code, test_cases_json):
                     "id": i,
                     "passed": is_passed,
                     "input": inp,
-                    "expected": exp,
-                    "actual": str(actual)
+                    "expected": disp_e,
+                    "actual": disp_a
                 })
             except Exception as e:
                 results.append({

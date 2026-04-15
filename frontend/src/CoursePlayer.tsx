@@ -10,7 +10,7 @@ import {
     PlayCircle, FileText, ChevronLeft, Menu, Code, HelpCircle,
     UploadCloud, Play, Save, Monitor, Cpu, ChevronDown, ChevronRight, CreditCard,
     File as FileIcon, X, CheckCircle, Radio, Lock, ArrowLeft, AlertCircle, Clock,
-    Zap, CheckSquare, Square, CheckCheck, Award, Edit, AlertTriangle, Maximize, Minimize, LockKeyhole, Cloud // <--- Added 'Cloud' icon here
+    Zap, CheckSquare, Square, CheckCheck, Award, Edit, AlertTriangle, Maximize, Minimize, LockKeyhole, Cloud, Link as ResourceLinkIcon // <--- Added 'Cloud' icon here
 } from "lucide-react";
 import { CODE_TEMPLATES } from './utils/codeTemplates';
 
@@ -674,6 +674,7 @@ const DelayedVideoPlayer = ({ lesson, plyrOptions }: { lesson: any, plyrOptions:
     // 1️⃣ REFS: One for API, One for the Super Container
     const plyrRef = useRef<any>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const plyrSourceRef = useRef<any>(null);
 
     const getYoutubeId = (url: string) => {
         const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
@@ -714,8 +715,14 @@ const DelayedVideoPlayer = ({ lesson, plyrOptions }: { lesson: any, plyrOptions:
         controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume'], // ❌ Removed 'fullscreen'
     }), [plyrOptions]);
 
-    const videoId = getYoutubeId(lesson.url);
-    const driveUrl = getDriveEmbedUrl(lesson.url);
+    const videoId = getYoutubeId(lesson.url || "");
+    const driveUrl = getDriveEmbedUrl(lesson.url || "");
+
+    useEffect(() => {
+        plyrSourceRef.current = videoId
+            ? { type: "video" as const, sources: [{ src: videoId, provider: "youtube" as const }] }
+            : null;
+    }, [lesson.id, videoId]);
 
     if (!videoId && !driveUrl) return <div className="text-white p-10">Invalid Video URL</div>;
 
@@ -727,8 +734,6 @@ const DelayedVideoPlayer = ({ lesson, plyrOptions }: { lesson: any, plyrOptions:
             </div>
         );
     }
-
-    const plyrSource = videoId ? { type: "video" as const, sources: [{ src: videoId, provider: "youtube" as const }] } : null;
 
     return (
         <div style={{ width: "100%", height: "100%", background: "black", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -762,7 +767,7 @@ const DelayedVideoPlayer = ({ lesson, plyrOptions }: { lesson: any, plyrOptions:
                         <Plyr
                             ref={plyrRef}
                             key={lesson.id}
-                            source={plyrSource!}
+                            source={plyrSourceRef.current}
                             options={customOptions} // ✅ Uses options WITHOUT default fullscreen button
                         />
                     )}
@@ -1233,6 +1238,35 @@ const CoursePlayer = () => {
         return url.replace("/view", "/preview");
     };
 
+    const getResourceLinks = (lesson: any): { title: string; link: string }[] => {
+        const raw = lesson?.resource_links;
+        if (!raw) return [];
+        if (Array.isArray(raw)) {
+            return raw
+                .map((resource: any) => ({
+                    title: String(resource?.title || resource?.link || "").trim(),
+                    link: String(resource?.link || resource?.url || "").trim(),
+                }))
+                .filter((resource: { title: string; link: string }) => resource.title && resource.link);
+        }
+        if (typeof raw === "string") {
+            try {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) {
+                    return parsed
+                        .map((resource: any) => ({
+                            title: String(resource?.title || resource?.link || "").trim(),
+                            link: String(resource?.link || resource?.url || "").trim(),
+                        }))
+                        .filter((resource: { title: string; link: string }) => resource.title && resource.link);
+                }
+            } catch {
+                return [];
+            }
+        }
+        return [];
+    };
+
     const plyrOptions = useMemo(() => ({
         controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'fullscreen'],
         youtube: { noCookie: true, rel: 0, showinfo: 0, iv_load_policy: 3, modestbranding: 1 },
@@ -1301,7 +1335,42 @@ const CoursePlayer = () => {
             contentBody = (<div className="w-full h-full relative"><iframe src={getEmbedUrl(activeLesson.url)} width="100%" height="100%" className="bg-white border-0" allow="autoplay" /><div style={{ position: "absolute", top: 0, right: 0, width: "65px", height: "60px", background: "#202124", zIndex: 50 }}></div></div>);
         }
         else if (activeLesson.type === "quiz") contentBody = (<div className="w-full h-full bg-slate-50 flex flex-col items-center justify-center p-4"><iframe src={getEmbedUrl(activeLesson.url)} width="100%" height="100%" frameBorder="0" className="rounded-xl shadow-sm border border-slate-200 bg-white max-w-4xl" allowFullScreen sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation">Loading...</iframe></div>);
-        else if (activeLesson.type === "video" || activeLesson.type === "live_class") contentBody = <DelayedVideoPlayer key={activeLesson.id} lesson={activeLesson} plyrOptions={plyrOptions} />;
+        else if (activeLesson.type === "video" || activeLesson.type === "live_class") {
+            const resourceLinks = getResourceLinks(activeLesson);
+            contentBody = (
+                <div className="h-full overflow-y-auto bg-slate-100 p-4 lg:p-6">
+                    <div className="max-w-5xl mx-auto bg-black rounded-xl overflow-hidden shadow-xl">
+                        <DelayedVideoPlayer key={activeLesson.id} lesson={activeLesson} plyrOptions={plyrOptions} />
+                    </div>
+                    {resourceLinks.length > 0 && (
+                        <div className="max-w-5xl mx-auto mt-4 bg-white border border-slate-200 rounded-xl p-4">
+                            <div className="text-sm font-extrabold text-slate-800 mb-3 uppercase tracking-wide">Resources</div>
+                            <div className="flex flex-col gap-2">
+                                {resourceLinks.map((resource: { title: string; link: string }, idx: number) => (
+                                    <div
+                                        key={`${activeLesson.id}-resource-${idx}`}
+                                        className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+                                    >
+                                        <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                                            <ResourceLinkIcon size={15} />
+                                            {resource.title}
+                                        </div>
+                                        <a
+                                            href={resource.link}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="mt-1 block text-xs text-[#005EB8] hover:text-[#004a94] hover:underline break-all"
+                                        >
+                                            {resource.link}
+                                        </a>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
         else if (activeLesson.type === "live_test") contentBody = <LiveTestProctor lesson={activeLesson} />;
         else if (activeLesson.type === "code_test") contentBody = <CodeCompiler lesson={activeLesson} />;
         else if (activeLesson.type === "assignment") {
