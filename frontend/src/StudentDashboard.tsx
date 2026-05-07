@@ -224,7 +224,7 @@ const StudentDashboard = () => {
 
     // 🎨 PROFESSIONAL THEME PALETTE
     const brand = {
-        iqBlue: "#005EB8", iqGreen: "#87C232", mainBg: "#E2E8F0", cardBg: "#F8FAFC", border: "#cbd5e1", textMain: "#1e293b", textLight: "#64748b"
+        cloudBlue: "#005EB8", cloudGreen: "#87C232", mainBg: "#E2E8F0", cardBg: "#F8FAFC", border: "#cbd5e1", textMain: "#1e293b", textLight: "#64748b"
     };
 
     const languages = [
@@ -738,7 +738,7 @@ const StudentDashboard = () => {
                     key: razorpayKey,
                     amount: orderRes.data.amount,
                     currency: orderRes.data.currency,
-                    name: "iQmath Pro",
+                    name: "Cloud Vaathi Pro",
                     description: `Unlock ${selectedCourse.title}`,
                     order_id: orderRes.data.id,
                     handler: async function (response: any) {
@@ -755,7 +755,7 @@ const StudentDashboard = () => {
                         triggerToast("🎉 Payment Successful! Course Unlocked.", "success");
                         fetchData(); setShowModal(false); setActiveTab("learning");
                     },
-                    prefill: { name: "Student", email: "student@iqmath.com" },
+                    prefill: { name: "Student", email: "lmscloudvaathi@gmail.com" },
                     theme: { color: "#005EB8" },
                 };
 
@@ -894,7 +894,7 @@ const StudentDashboard = () => {
             <div className="flex h-screen items-center justify-center bg-[#E2E8F0]">
                 <div className="flex flex-col items-center gap-4">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#005EB8]"></div>
-                    <p className="text-slate-600 font-bold animate-pulse">Loading iQmath Dashboard...</p>
+                    <p className="text-slate-600 font-bold animate-pulse">Loading Cloud Vaathi Dashboard...</p>
                 </div>
             </div>
         );
@@ -985,7 +985,7 @@ const StudentDashboard = () => {
                         className="absolute left-0 top-0 h-full w-64 bg-white shadow-2xl p-6 flex flex-col gap-6"
                     >
                         <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-                            <span className="text-xl font-extrabold text-[#005EB8]">iQmath<span className="text-[#87C232]">Pro</span></span>
+                            <span className="text-xl font-extrabold text-[#005EB8]">Cloud<span className="text-[#87C232]">Vaathi Pro</span></span>
                             <button onClick={() => setIsMobileMenuOpen(false)} className="text-slate-400 hover:text-slate-600">
                                 <X size={24} />
                             </button>
@@ -1262,15 +1262,15 @@ const StudentDashboard = () => {
                         <h3 style={{ margin: "0 0 10px 0", fontSize: "20px", fontWeight: "800", color: brand.textMain, textAlign: "center" }}>Enter Access Key</h3>
                         <p className="text-center text-slate-500 text-sm mb-6">This challenge is protected. Enter the pass key provided by your instructor.</p>
                         <input type="text" placeholder="e.g. SECRET123" value={passKeyInput} onChange={(e) => setPassKeyInput(e.target.value)} className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-[#005EB8] text-center font-bold text-lg tracking-widest mb-6" />
-                        <div style={{ display: "flex", gap: "10px" }}><button onClick={() => setShowPassKeyModal(null)} style={{ flex: 1, padding: "12px", background: "transparent", border: `1px solid ${brand.border}`, borderRadius: "8px", fontWeight: "bold", color: brand.textLight, cursor: "pointer" }}>Cancel</button><button onClick={handleStartTest} style={{ flex: 1, padding: "12px", background: brand.iqBlue, border: "none", borderRadius: "8px", fontWeight: "bold", color: "white", cursor: "pointer" }}>Start Test</button></div>
+                        <div style={{ display: "flex", gap: "10px" }}><button onClick={() => setShowPassKeyModal(null)} style={{ flex: 1, padding: "12px", background: "transparent", border: `1px solid ${brand.border}`, borderRadius: "8px", fontWeight: "bold", color: brand.textLight, cursor: "pointer" }}>Cancel</button><button onClick={handleStartTest} style={{ flex: 1, padding: "12px", background: brand.cloudBlue, border: "none", borderRadius: "8px", fontWeight: "bold", color: "white", cursor: "pointer" }}>Start Test</button></div>
                     </div>
                 </div>
             )}
 
             {/* ✅ PROFESSIONAL TOAST UI */}
             {toast.show && (
-                <div style={{ position: "fixed", top: "20px", right: "20px", zIndex: 9999, background: "white", padding: "16px 24px", borderRadius: "12px", boxShadow: "0 10px 30px -5px rgba(0,0,0,0.15)", borderLeft: `6px solid ${toast.type === "success" ? brand.iqGreen : "#ef4444"}`, display: "flex", alignItems: "center", gap: "12px", animation: "slideIn 0.3s ease-out" }}>
-                    {toast.type === "success" ? <CheckCircle size={24} color={brand.iqGreen} /> : <AlertTriangle size={24} color="#ef4444" />}
+                <div style={{ position: "fixed", top: "20px", right: "20px", zIndex: 9999, background: "white", padding: "16px 24px", borderRadius: "12px", boxShadow: "0 10px 30px -5px rgba(0,0,0,0.15)", borderLeft: `6px solid ${toast.type === "success" ? brand.cloudGreen : "#ef4444"}`, display: "flex", alignItems: "center", gap: "12px", animation: "slideIn 0.3s ease-out" }}>
+                    {toast.type === "success" ? <CheckCircle size={24} color={brand.cloudGreen} /> : <AlertTriangle size={24} color="#ef4444" />}
                     <div><h4 style={{ margin: "0 0 4px 0", fontSize: "14px", fontWeight: "700", color: brand.textMain }}>{toast.type === "success" ? "Success" : "Alert"}</h4><p style={{ margin: 0, fontSize: "13px", color: brand.textLight }}>{toast.message}</p></div>
                     <button onClick={() => setToast({ ...toast, show: false })} style={{ background: "none", border: "none", cursor: "pointer", marginLeft: "10px" }}><X size={16} color="#94a3b8" /></button>
                     <style>{`@keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }`}</style>

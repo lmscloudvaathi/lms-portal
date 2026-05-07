@@ -180,6 +180,10 @@ function App() {
 const ProtectedRoute = ({ children, requiredRole }: { children: any, requiredRole?: string }) => {
   const session = getValidSession();
   if (!session?.token) return <Navigate to="/login" replace />;
+  if (session.role !== "instructor" && session.role !== "student") {
+    clearSession();
+    return <Navigate to="/login" replace />;
+  }
   if (requiredRole && session.role !== requiredRole) {
     return session.role === "instructor" ? <Navigate to="/dashboard" /> : <Navigate to="/student-dashboard" />;
   }
@@ -189,12 +193,20 @@ const ProtectedRoute = ({ children, requiredRole }: { children: any, requiredRol
 const PublicOnlyRoute = ({ children }: { children: any }) => {
   const session = getValidSession();
   if (!session?.token) return children;
+  if (session.role !== "instructor" && session.role !== "student") {
+    clearSession();
+    return children;
+  }
   return session.role === "instructor" ? <Navigate to="/dashboard" replace /> : <Navigate to="/student-dashboard" replace />;
 };
 
 const FallbackRoute = () => {
   const session = getValidSession();
   if (!session?.token) return <Navigate to="/" replace />;
+  if (session.role !== "instructor" && session.role !== "student") {
+    clearSession();
+    return <Navigate to="/" replace />;
+  }
   return session.role === "instructor" ? <Navigate to="/dashboard" replace /> : <Navigate to="/student-dashboard" replace />;
 };
 

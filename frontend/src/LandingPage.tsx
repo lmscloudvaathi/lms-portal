@@ -3,17 +3,18 @@ import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Shield, ArrowRight, Briefcase, ChevronRight,
-  BookOpen, Infinity, Award, Headset, Users,
+  BookOpen, Infinity as InfinityIcon, Award, Headset, Users,
   CheckCircle, Mic, Video, PhoneOff,
   Star, MapPin, Mail, ArrowUp
 } from "lucide-react";
 import { getValidSession } from "./utils/session";
+import BrandLogo from "./components/BrandLogo";
 
 // --- 🎨 BRAND CONSTANTS ---
 const BRAND_BLUE = "#005EB8";
 const BRAND_GREEN = "#87C232";
 const GITHUB_REPO_URL = "https://github.com/iqmathanalytics/iqmathlms_platform";
-const RAZORPAY_PAYLINK_URL = "https://razorpay.me/iqmathtechnologies";
+const RAZORPAY_PAYLINK_URL = "https://razorpay.me/@cloudvaathi";
 
 // --- 🔄 HERO SLIDE DATA ---
 const SLIDES = [
@@ -21,7 +22,7 @@ const SLIDES = [
     id: 0,
     line1: "Learn Every Day & Any",
     line2: "New Skills Online",
-    line3: "With Our iQmath Platform.",
+    line3: "With Cloud Vaathi.",
     sub: "Future-proof your career with world-class education.",
     highlightColor: "text-[#87C232]",
     buttonColor: "bg-[#87C232]",
@@ -41,64 +42,16 @@ const SLIDES = [
   },
 ];
 
-// --- 🎨 PRECISE BRAND LOGO (EXACT REPLICA) ---
-const IQMathLogo = ({ isTwoTone = false, color = "white" }) => (
-  <svg
-    viewBox="0 0 540 160"
-    className="w-full max-w-[280px] sm:max-w-[320px] lg:max-w-[440px]"
-    xmlns="http://www.w3.org/2000/svg"
-  >
-    <g transform="translate(10, 20)">
-      {/* Precise 'i' */}
-      <circle cx="35" cy="15" r="10" fill={isTwoTone ? BRAND_BLUE : color} />
-      <rect x="25" y="32" width="20" height="68" rx="5" fill={isTwoTone ? BRAND_BLUE : color} />
-
-      {/* Precise 'Q' */}
-      <path
-        d="M105 15 A50 50 0 1 0 105 115"
-        stroke={isTwoTone ? BRAND_BLUE : color}
-        strokeWidth="18"
-        fill="none"
-      />
-      <path
-        d="M105 15 A50 50 0 0 1 140 105 L 155 125"
-        stroke={isTwoTone ? BRAND_GREEN : color}
-        strokeWidth="18"
-        fill="none"
-        strokeLinecap="round"
-      />
-
-      {/* Circuit Nodes */}
-      <g stroke={isTwoTone ? BRAND_GREEN : color} strokeWidth="2.5" fill="none">
-        <path d="M85 65 V50 H95" />
-        <path d="M105 42 V55" />
-        <path d="M122 75 V60 H112" />
-        <circle cx="85" cy="65" r="5" fill={isTwoTone ? BRAND_GREEN : color} stroke="none" />
-        <circle cx="105" cy="42" r="5" fill={isTwoTone ? BRAND_GREEN : color} stroke="none" />
-        <circle cx="122" cy="75" r="5" fill={isTwoTone ? BRAND_GREEN : color} stroke="none" />
-      </g>
-    </g>
-    <text x="180" y="118" fontFamily="Arial, sans-serif" fontWeight="800" fontSize="105" fill={isTwoTone ? BRAND_BLUE : color} letterSpacing="-5">math</text>
-    <text x="185" y="148" fontFamily="Arial, sans-serif" fontWeight="600" fontSize="34" fill={isTwoTone ? BRAND_GREEN : color} letterSpacing="4">Technologies</text>
-  </svg>
-);
-
 // --- 📝 SECTION DATA ---
 const DYNAMIC_TEXTS = [
-  "Discover a transformative learning experience with iQmath's online courses, meticulously crafted for real-life applicability. Our curriculum seamlessly integrates theory with practical insights.",
+  "Discover a transformative learning experience with Cloud Vaathi's online courses, meticulously crafted for real-life applicability. Our curriculum seamlessly integrates theory with practical insights.",
   "Our expert-led sessions focus on industry-relevant skills, ensuring you stay ahead of the curve. Join thousands of successful students who have upgraded their careers.",
   "Experience interactive learning with live doubt-clearing sessions and hands-on projects. We prioritize your growth with personalized mentorship and community support."
 ];
 
-const VIDEOS = [
-  { id: "q6kVdZQLe54", title: "The Report | Hacker Rank Problem | Joins & SQL" },
-  { id: "65aaipcziy0", title: "How to Install MySQL Workbench in Windows" },
-  { id: "MC83S5IAQk8", title: "Connect to Database (MySQL) Using Excel" },
-];
-
 const FEATURES = [
   { icon: <BookOpen size={24} />, label: "10+ Online Courses" },
-  { icon: <Infinity size={24} />, label: "Lifetime Access" },
+  { icon: <InfinityIcon size={24} />, label: "Lifetime Access" },
   { icon: <Award size={24} />, label: "Value For Money" },
   { icon: <Headset size={24} />, label: "Lifetime Support" },
   { icon: <Users size={24} />, label: "Community Support" },
@@ -173,12 +126,12 @@ const LandingPage = () => {
       <div className="min-h-screen w-full relative flex flex-col lg:flex-row overflow-hidden">
         {/* LEFT CONTENT */}
         <div className="w-full lg:w-[50%] flex flex-col justify-center px-6 py-12 md:px-12 lg:px-20 bg-white relative z-20 text-center lg:text-left">
-          <div className="absolute top-6 left-6 lg:left-20 scale-75 origin-top-left lg:scale-50">
-            <IQMathLogo isTwoTone={true} />
+          <div className="absolute top-5 left-5 lg:left-20 origin-top-left">
+            <BrandLogo imageOnly={true} className="[&>img]:h-20 lg:[&>img]:h-28 [&>img]:max-w-[560px]" />
           </div>
 
           <AnimatePresence mode="wait">
-            <motion.div key={index} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} transition={{ duration: 0.5 }} className="mt-20 lg:mt-12">
+            <motion.div key={index} initial={{ opacity: 0, y: 24, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -24, scale: 0.98 }} transition={{ type: "spring", stiffness: 90, damping: 16 }} className="mt-20 lg:mt-12">
               <div className="space-y-0 text-slate-800">
                 <h2 className="text-3xl sm:text-4xl lg:text-4xl font-bold tracking-tight mb-1">{currentSlide.line1}</h2>
                 <h1 className={`text-4xl sm:text-5xl lg:text-6xl font-black leading-tight ${currentSlide.highlightColor} tracking-tighter`}>{currentSlide.line2}</h1>
@@ -202,10 +155,12 @@ const LandingPage = () => {
         <div className="hidden lg:flex w-[50%] h-auto min-h-screen relative items-center justify-center">
           <div className="absolute top-0 bottom-0 -left-28 w-56 bg-white transform skew-x-[-18deg] z-10 shadow-[-20px_0_40px_rgba(0,0,0,0.05)]"></div>
           <motion.div animate={{ backgroundColor: currentSlide.accent }} className="absolute top-0 bottom-0 -left-14 w-4 transform skew-x-[-18deg] z-10 opacity-30" />
-          <motion.div key={`bg-${index}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.8 }} className={`absolute inset-0 bg-gradient-to-br ${currentSlide.panelGradient}`} />
+          <motion.div key={`bg-${index}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 1.1, ease: "easeInOut" }} className={`absolute inset-0 bg-gradient-to-br ${currentSlide.panelGradient}`} />
+          <motion.div animate={{ x: [0, 18, 0], y: [0, -12, 0] }} transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }} className="absolute top-14 right-10 h-32 w-32 rounded-full bg-white/10 blur-2xl" />
+          <motion.div animate={{ x: [0, -14, 0], y: [0, 14, 0] }} transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }} className="absolute bottom-14 left-16 h-40 w-40 rounded-full bg-[#87C232]/20 blur-3xl" />
           <div className="relative z-20">
             <AnimatePresence mode="wait">
-              <motion.div key={`logo-${index}`} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 1.05, opacity: 0 }} transition={{ duration: 0.5 }} className="drop-shadow-[0_25px_40px_rgba(0,0,0,0.3)]">
+              <motion.div key={`logo-${index}`} initial={{ scale: 0.9, opacity: 0, rotate: -2 }} animate={{ scale: 1, opacity: 1, rotate: 0 }} exit={{ scale: 1.04, opacity: 0, rotate: 2 }} transition={{ type: "spring", stiffness: 80, damping: 14 }} className="drop-shadow-[0_25px_40px_rgba(0,0,0,0.3)]">
                 {index === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full">
                     <h1 className="text-5xl lg:text-7xl font-black text-white leading-tight tracking-tighter text-center drop-shadow-xl">
@@ -215,10 +170,10 @@ const LandingPage = () => {
                   </div>
                 ) : (
                   <>
-                    <IQMathLogo color="white" />
+                    <BrandLogo size="xl" showTagline={true} className="items-center [&_*]:text-white" />
                     <div className="mt-4 text-center">
                       <div className="h-0.5 w-48 bg-white/40 mx-auto rounded-full mb-4" />
-                      <h3 className="text-white text-3xl font-light tracking-[0.3em] uppercase opacity-90">Technologies</h3>
+                      <h3 className="text-white text-xl font-semibold tracking-[0.2em] uppercase opacity-95">Learning That Compounds Daily</h3>
                     </div>
                   </>
                 )}
@@ -228,28 +183,13 @@ const LandingPage = () => {
         </div>
       </div>
 
-      {/* ================= SECTION 2: FEATURES & VIDEOS ================= */}
+      {/* ================= SECTION 2: FEATURES ================= */}
       <div className="w-full bg-[#F8FAFC] py-16 lg:py-20 px-6 lg:px-24 border-t border-slate-200">
         <div className="flex flex-wrap justify-center gap-6 lg:gap-16 mb-16 lg:mb-24">
           {FEATURES.map((feature, i) => (
             <div key={i} className="flex items-center gap-4 group">
               <div className="w-12 h-12 lg:w-14 lg:h-14 rounded-full bg-[#005EB8]/10 flex items-center justify-center text-[#005EB8] group-hover:bg-[#005EB8] group-hover:text-white transition-all shadow-sm">{feature.icon}</div>
               <span className="text-slate-700 font-bold text-base lg:text-lg">{feature.label}</span>
-            </div>
-          ))}
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 lg:gap-8 mb-16 lg:mb-24">
-          {VIDEOS.map((video) => (
-            <div key={video.id} className="bg-white rounded-2xl overflow-hidden shadow-xl border border-slate-100">
-              <div className="relative pt-[56.25%] bg-black">
-                <iframe src={`https://www.youtube.com/embed/${video.id}`} title={video.title} className="absolute top-0 left-0 w-full h-full" allowFullScreen></iframe>
-              </div>
-              <div className="p-5">
-                <h3 className="font-bold text-slate-800 text-sm leading-relaxed line-clamp-2 min-h-[40px]">{video.title}</h3>
-                <div className="flex items-center gap-2 mt-4 text-xs text-[#005EB8] font-extrabold uppercase">
-                  <span className="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span> Watch Now
-                </div>
-              </div>
             </div>
           ))}
         </div>
@@ -325,14 +265,14 @@ const LandingPage = () => {
       </div>
 
       {/* ================= SECTION 6: FOOTER ================= */}
-      <footer className="w-full bg-[#020617] text-slate-300 py-12 lg:py-16 px-6 lg:px-24 border-t border-slate-800">
+      <footer className="w-full bg-[#E2E8F0] text-slate-800 py-12 lg:py-16 px-6 lg:px-24 border-t border-slate-300">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10 mb-12">
-          <div><h4 className="text-white text-lg font-bold mb-6 relative pb-2 inline-block">About Company<span className="absolute bottom-0 left-0 w-8 h-1 bg-[#005EB8] rounded-full"></span></h4><h1 className="text-2xl font-black text-white tracking-tighter">iQ<span className="text-[#005EB8]">math</span></h1></div>
-          <div><h4 className="text-white text-lg font-bold mb-6 relative pb-2 inline-block">Quick Links<span className="absolute bottom-0 left-0 w-8 h-1 bg-[#005EB8] rounded-full"></span></h4><ul className="space-y-3 text-sm font-medium">{["Marketing", "Data Science", "Business"].map((item) => (<li key={item} className="hover:text-[#005EB8] cursor-pointer transition-colors">{item}</li>))}</ul></div>
-          <div><h4 className="text-white text-lg font-bold mb-6 relative pb-2 inline-block">Resources<span className="absolute bottom-0 left-0 w-8 h-1 bg-[#005EB8] rounded-full"></span></h4><ul className="space-y-3 text-sm font-medium"><li><a href={GITHUB_REPO_URL} target="_blank" rel="noreferrer" className="hover:text-[#005EB8] transition-colors">GitHub Repository</a></li><li><a href={RAZORPAY_PAYLINK_URL} target="_blank" rel="noreferrer" className="hover:text-[#005EB8] transition-colors">Razorpay Payment Link</a></li><li className="hover:text-[#005EB8] cursor-pointer transition-colors">Documentation</li></ul></div>
-          <div><h4 className="text-white text-lg font-bold mb-6 relative pb-2 inline-block">Get in touch!<span className="absolute bottom-0 left-0 w-8 h-1 bg-[#005EB8] rounded-full"></span></h4><ul className="space-y-4 text-sm"><li className="flex gap-3"><MapPin size={18} className="text-[#005EB8] flex-shrink-0" /> <span className="flex-1">Chennai, Tamil Nadu</span></li><li className="flex gap-3"><Mail size={18} className="text-[#005EB8] flex-shrink-0" /> iqmathindia@gmail.com</li></ul></div>
+          <div><h4 className="text-slate-900 text-lg font-bold mb-6 relative pb-2 inline-block">About Company<span className="absolute bottom-0 left-0 w-8 h-1 bg-[#005EB8] rounded-full"></span></h4><BrandLogo imageOnly={true} className="[&>img]:h-24 [&>img]:max-w-[520px]" /></div>
+          <div><h4 className="text-slate-900 text-lg font-bold mb-6 relative pb-2 inline-block">Quick Links<span className="absolute bottom-0 left-0 w-8 h-1 bg-[#005EB8] rounded-full"></span></h4><ul className="space-y-3 text-sm font-medium">{["Marketing", "Data Science", "Business"].map((item) => (<li key={item} className="hover:text-[#005EB8] cursor-pointer transition-colors text-slate-700">{item}</li>))}</ul></div>
+          <div><h4 className="text-slate-900 text-lg font-bold mb-6 relative pb-2 inline-block">Resources<span className="absolute bottom-0 left-0 w-8 h-1 bg-[#005EB8] rounded-full"></span></h4><ul className="space-y-3 text-sm font-medium"><li><a href={GITHUB_REPO_URL} target="_blank" rel="noreferrer" className="hover:text-[#005EB8] transition-colors text-slate-700">GitHub Repository</a></li><li><a href={RAZORPAY_PAYLINK_URL} target="_blank" rel="noreferrer" className="hover:text-[#005EB8] transition-colors text-slate-700">Razorpay Payment Link</a></li><li className="hover:text-[#005EB8] cursor-pointer transition-colors text-slate-700">Documentation</li></ul></div>
+          <div><h4 className="text-slate-900 text-lg font-bold mb-6 relative pb-2 inline-block">Get in touch!<span className="absolute bottom-0 left-0 w-8 h-1 bg-[#005EB8] rounded-full"></span></h4><ul className="space-y-4 text-sm"><li className="flex gap-3"><MapPin size={18} className="text-[#005EB8] flex-shrink-0" /> <span className="flex-1 text-slate-700">Chennai, Tamil Nadu</span></li><li className="flex gap-3"><Mail size={18} className="text-[#005EB8] flex-shrink-0" /> <span className="text-slate-700">lmscloudvaathi@gmail.com</span></li></ul></div>
         </div>
-        <div className="pt-8 border-t border-slate-800 text-center text-xs text-slate-500"><p>Copyright © 2023 iQmath All Rights Reserved.</p></div>
+        <div className="pt-8 border-t border-slate-300 text-center text-xs text-slate-600"><p>Copyright © 2026 Cloud Vaathi. All Rights Reserved.</p></div>
       </footer>
 
       {/* SCROLL TO TOP */}

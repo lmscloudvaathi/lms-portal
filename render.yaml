@@ -20,6 +20,8 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: DB_SSL_CA_PATH
+        sync: false
       - key: RAZORPAY_KEY_ID
         sync: false
       - key: RAZORPAY_KEY_SECRET

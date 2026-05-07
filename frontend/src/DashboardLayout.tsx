@@ -15,7 +15,7 @@ const DashboardLayout = () => {
 
   // ✅ Profile Dropdown State
   const [showProfileMenu, setShowProfileMenu] = useState(false);
-  const instructorData = { name: "Instructor", email: "instructor@iqmath.com" };
+  const instructorData = { name: "Instructor", email: "lmscloudvaathi@gmail.com" };
 
   const menuItems = [
     { label: "Home", path: "/dashboard", icon: <LayoutDashboard size={20} /> },

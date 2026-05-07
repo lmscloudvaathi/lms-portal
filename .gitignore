@@ -33,3 +33,6 @@ frontend/.env
 backend/token.json
 backend/credentials.json
 backend/*.pem
+
+# Local Netlify folder
+.netlify
