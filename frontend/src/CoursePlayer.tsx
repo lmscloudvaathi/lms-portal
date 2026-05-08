@@ -1155,7 +1155,7 @@ const CoursePlayer = () => {
             );
 
             const options = {
-                key: razorpayKey,
+                key: data.key_id || razorpayKey,
                 amount: data.amount,
                 currency: "INR",
                 name: "Cloud Vaathi Pro",

@@ -1645,7 +1645,11 @@ async def create_payment_order(
     }
     try:
         order = await asyncio.to_thread(client.order.create, data=order_data)
-        return order
+        # Return the exact publishable key used by this backend account.
+        # This prevents frontend/backend key-account mismatch in Checkout.
+        order_payload = dict(order)
+        order_payload["key_id"] = RAZORPAY_KEY_ID
+        return order_payload
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Razorpay order creation failed: {str(e)}")
 

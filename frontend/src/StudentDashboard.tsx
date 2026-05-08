@@ -735,7 +735,7 @@ const StudentDashboard = () => {
                 );
 
                 const options = {
-                    key: razorpayKey,
+                    key: orderRes.data.key_id || razorpayKey,
                     amount: orderRes.data.amount,
                     currency: orderRes.data.currency,
                     name: "Cloud Vaathi Pro",
