@@ -1,8 +1,6 @@
 // src/config.ts
 
-// This automatically chooses the right URL:
-// - If you are working on localhost, it uses your local backend.
-// - If you are deployed on Vercel, it uses the Render backend (we will set this up later).
+// API base (must include /api/v1). Set VITE_API_URL in .env locally or in Cloudflare Pages → Settings → Environment variables for production builds.
 export const API_BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/api/v1";
 
 export const endpoints = {

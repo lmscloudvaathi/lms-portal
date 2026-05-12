@@ -110,14 +110,27 @@ async def on_startup():
 async def on_shutdown():
     token_manager.stop()
 
-# 2. CONFIG: CORS POLICY (Restricted for Security in Prod)
+# 2. CONFIG: CORS (explicit origins when using credentials; browsers reject credentials + "*")
+def _cors_settings() -> tuple[list[str], bool]:
+    raw = os.getenv(
+        "CORS_ORIGINS",
+        "https://lms.cloudvaathi.in,https://cloudvaathi-lms-20260508161650.netlify.app,http://localhost:5173,http://127.0.0.1:5173",
+    ).strip()
+    if raw == "*":
+        return ["*"], False
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if not parts:
+        return ["*"], False
+    return parts, True
+
+
+_cors_allow, _cors_credentials = _cors_settings()
 app.add_middleware(
     CORSMiddleware,
-    # 🔒 SECURITY: In production, change "*" to ["https://your-frontend-domain.com"]
-    allow_origins=["*"], 
-    allow_credentials=True,
-    allow_methods=["*"], 
-    allow_headers=["*"], 
+    allow_origins=_cors_allow,
+    allow_credentials=_cors_credentials,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # --- 🔐 SECURITY & AUTH CONFIG ---
