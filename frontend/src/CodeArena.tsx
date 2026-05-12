@@ -3,7 +3,7 @@ import axios from "axios";
 import API_BASE_URL from './config';
 import {
     Plus, Code, X, Sparkles, Check, Trash2,
-    Download, Users, CheckCircle, AlertTriangle
+    Download, Users, CheckCircle, AlertTriangle, Pencil
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -12,6 +12,8 @@ const CodeArena = () => {
     const [tests, setTests] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
     const [deletingId, setDeletingId] = useState<number | null>(null);
+    const [editingTestId, setEditingTestId] = useState<number | null>(null);
+    const [detailLoadingId, setDetailLoadingId] = useState<number | null>(null);
 
     // --- RESULTS STATE ---
     const [showResultsModal, setShowResultsModal] = useState(false);
@@ -56,6 +58,68 @@ const CodeArena = () => {
             const res = await axios.get(`${API_BASE_URL}/code-tests`, { headers: { Authorization: `Bearer ${token}` } });
             setTests(res.data);
         } catch (err) { console.error(err); }
+    };
+
+    const resetChallengeForm = () => {
+        setEditingTestId(null);
+        setChallengeTitle("");
+        setPassKey("");
+        setTimeLimit(60);
+        setAddedProblems([]);
+        setProbTitle("");
+        setProbDesc("");
+        setTestCases([{ input: "", output: "", hidden: false }]);
+    };
+
+    const closeModal = () => {
+        setShowModal(false);
+        resetChallengeForm();
+    };
+
+    const openCreateModal = () => {
+        resetChallengeForm();
+        setShowModal(true);
+    };
+
+    const caseCountLabel = (raw: string) => {
+        try {
+            const arr = JSON.parse(raw);
+            return Array.isArray(arr) ? arr.length : 0;
+        } catch {
+            return "?";
+        }
+    };
+
+    const handleEditChallenge = async (test: { id: number }) => {
+        const token = localStorage.getItem("token");
+        setDetailLoadingId(test.id);
+        try {
+            const res = await axios.get(`${API_BASE_URL}/code-tests/${test.id}/manage`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            setEditingTestId(test.id);
+            setChallengeTitle(res.data.title);
+            setPassKey(res.data.pass_key);
+            setTimeLimit(res.data.time_limit);
+            setAddedProblems(
+                (res.data.problems || []).map((p: any) => ({
+                    title: p.title,
+                    description: p.description,
+                    difficulty: p.difficulty || "Easy",
+                    test_cases:
+                        typeof p.test_cases === "string" ? p.test_cases : JSON.stringify(p.test_cases ?? []),
+                }))
+            );
+            setProbTitle("");
+            setProbDesc("");
+            setTestCases([{ input: "", output: "", hidden: false }]);
+            setShowModal(true);
+        } catch (err) {
+            console.error(err);
+            triggerToast("Could not load challenge for editing.", "error");
+        } finally {
+            setDetailLoadingId(null);
+        }
     };
 
     const handleDeleteChallenge = async (testId: number, title: string) => {
@@ -195,14 +259,20 @@ const CodeArena = () => {
                 time_limit: timeLimit,
                 problems: addedProblems
             };
-            await axios.post(`${API_BASE_URL}/code-tests`, payload, { headers: { Authorization: `Bearer ${token}` } });
-            setShowModal(false);
+            if (editingTestId) {
+                await axios.patch(`${API_BASE_URL}/code-tests/${editingTestId}`, payload, {
+                    headers: { Authorization: `Bearer ${token}` },
+                });
+                triggerToast("Challenge updated successfully!", "success");
+            } else {
+                await axios.post(`${API_BASE_URL}/code-tests`, payload, { headers: { Authorization: `Bearer ${token}` } });
+                triggerToast("Challenge Created Successfully!", "success");
+            }
+            closeModal();
             fetchTests();
-            triggerToast("Challenge Created Successfully!", "success"); // ✅ Replaced Alert
-            setChallengeTitle(""); setPassKey(""); setAddedProblems([]);
         } catch (err) {
             console.error(err);
-            triggerToast("Failed to create challenge", "error"); // ✅ Replaced Alert
+            triggerToast(editingTestId ? "Failed to update challenge" : "Failed to create challenge", "error");
         } finally {
             setLoading(false);
         }
@@ -216,7 +286,7 @@ const CodeArena = () => {
                     <h1 className="text-2xl md:text-3xl font-extrabold text-[#1e293b]">Code Arena</h1>
                     <p className="text-sm md:text-base text-[#64748b]">Create and manage coding challenges.</p>
                 </div>
-                <button onClick={() => setShowModal(true)} className="w-full md:w-auto bg-[#005EB8] hover:bg-[#004a94] text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-200">
+                <button type="button" onClick={openCreateModal} className="w-full md:w-auto bg-[#005EB8] hover:bg-[#004a94] text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-200">
                     <Plus size={20} /> Create Challenge
                 </button>
             </div>
@@ -253,6 +323,14 @@ const CodeArena = () => {
                                 </button>
                                 <button
                                     type="button"
+                                    onClick={() => handleEditChallenge(test)}
+                                    disabled={detailLoadingId === test.id}
+                                    className="w-full sm:w-auto px-4 py-2 bg-white border border-[#cbd5e1] rounded-lg text-slate-700 font-bold text-sm hover:bg-slate-50 transition-all flex items-center justify-center gap-2 shadow-sm disabled:opacity-60"
+                                >
+                                    <Pencil size={16} /> {detailLoadingId === test.id ? "Loading…" : "Edit"}
+                                </button>
+                                <button
+                                    type="button"
                                     onClick={() => handleDeleteChallenge(test.id, test.title)}
                                     disabled={deletingId === test.id}
                                     className="w-full sm:w-auto px-4 py-2 bg-white border border-red-200 rounded-lg text-red-600 font-bold text-sm hover:bg-red-50 transition-all flex items-center justify-center gap-2 shadow-sm disabled:opacity-60"
@@ -273,10 +351,12 @@ const CodeArena = () => {
                             {/* Header */}
                             <div className="p-6 border-b border-[#cbd5e1] flex justify-between items-center sticky top-0 bg-[#F8FAFC]/95 backdrop-blur-md z-10">
                                 <div>
-                                    <h2 className="text-xl font-bold text-[#1e293b]">Define New Challenge</h2>
-                                    <p className="text-xs text-[#64748b] mt-1">Configure test details and add coding problems.</p>
+                                    <h2 className="text-xl font-bold text-[#1e293b]">{editingTestId ? "Edit Challenge" : "Define New Challenge"}</h2>
+                                    <p className="text-xs text-[#64748b] mt-1">
+                                        {editingTestId ? "Update settings and problems, then save. Existing problem IDs will change." : "Configure test details and add coding problems."}
+                                    </p>
                                 </div>
-                                <button onClick={() => setShowModal(false)} className="bg-white border border-[#cbd5e1] p-2 rounded-full hover:bg-red-50 hover:border-red-200 hover:text-red-500 transition-colors"><X size={20} /></button>
+                                <button type="button" onClick={closeModal} className="bg-white border border-[#cbd5e1] p-2 rounded-full hover:bg-red-50 hover:border-red-200 hover:text-red-500 transition-colors"><X size={20} /></button>
                             </div>
 
                             <div className="p-8 space-y-8">
@@ -373,7 +453,7 @@ const CodeArena = () => {
                                                         </div>
                                                         <p className="text-xs text-[#64748b] mt-1 line-clamp-2">{p.description}</p>
                                                         <div className="mt-2 flex gap-2">
-                                                            <span className="text-[10px] bg-[#F8FAFC] px-1.5 py-0.5 rounded text-[#64748b] font-mono border border-[#cbd5e1]">{(JSON.parse(p.test_cases)).length} Cases</span>
+                                                            <span className="text-[10px] bg-[#F8FAFC] px-1.5 py-0.5 rounded text-[#64748b] font-mono border border-[#cbd5e1]">{caseCountLabel(p.test_cases)} Cases</span>
                                                         </div>
                                                     </div>
                                                 ))
@@ -384,9 +464,9 @@ const CodeArena = () => {
                             </div>
 
                             <div className="p-6 border-t border-[#cbd5e1] flex justify-end gap-3 sticky bottom-0 bg-[#F8FAFC] rounded-b-2xl">
-                                <button onClick={() => setShowModal(false)} className="px-6 py-3 rounded-xl font-bold text-[#64748b] hover:bg-white border border-transparent hover:border-[#cbd5e1] transition-all">Cancel</button>
-                                <button onClick={handleSaveChallenge} disabled={loading} className="px-8 py-3 bg-[#87C232] text-white rounded-xl font-bold hover:bg-[#76a82b] flex items-center gap-2 shadow-lg shadow-green-100 transition-all active:scale-95 disabled:opacity-70">
-                                    {loading ? "Saving..." : <><Check size={18} /> Save Complete Challenge</>}
+                                <button type="button" onClick={closeModal} className="px-6 py-3 rounded-xl font-bold text-[#64748b] hover:bg-white border border-transparent hover:border-[#cbd5e1] transition-all">Cancel</button>
+                                <button type="button" onClick={handleSaveChallenge} disabled={loading} className="px-8 py-3 bg-[#87C232] text-white rounded-xl font-bold hover:bg-[#76a82b] flex items-center gap-2 shadow-lg shadow-green-100 transition-all active:scale-95 disabled:opacity-70">
+                                    {loading ? "Saving..." : <><Check size={18} /> {editingTestId ? "Save Changes" : "Save Complete Challenge"}</>}
                                 </button>
                             </div>
                         </motion.div>

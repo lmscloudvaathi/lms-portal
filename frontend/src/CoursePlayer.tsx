@@ -74,7 +74,7 @@ const CodeCompiler = ({ lesson, contentItemId, onLessonComplete }: { lesson: any
     };
 
     const [code, setCode] = useState(CODE_TEMPLATES.python);
-    const [codeByProblem, setCodeByProblem] = useState<Record<number, string>>({});
+    const [, setCodeByProblem] = useState<Record<number, string>>({});
     const [solvedProblems, setSolvedProblems] = useState<Record<number, boolean>>({});
     const [finishing, setFinishing] = useState(false);
     const [output, setOutput] = useState("Ready to execute...");
@@ -234,7 +234,7 @@ const CodeCompiler = ({ lesson, contentItemId, onLessonComplete }: { lesson: any
         setFinishing(true);
         try {
             const token = localStorage.getItem("token");
-            await axios.post(`${API_BASE_URL}/content/${contentItemId}/complete`, {}, { headers: { Authorization: `Bearer ${token}` } } });
+            await axios.post(`${API_BASE_URL}/content/${contentItemId}/complete`, {}, { headers: { Authorization: `Bearer ${token}` } });
             triggerToast("Lesson finished and marked complete!", "success");
             onLessonComplete?.();
         } catch (e: any) {

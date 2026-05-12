@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import Editor from "@monaco-editor/react";
@@ -226,6 +226,20 @@ const StudentDashboard = () => {
     const [passedProblems, setPassedProblems] = useState<Record<number, boolean>>({});
 
     const videoRef = useRef<HTMLVideoElement>(null);
+    const proctorStreamRef = useRef<MediaStream | null>(null);
+
+    const stopProctorCamera = useCallback(() => {
+        try {
+            proctorStreamRef.current?.getTracks().forEach((t) => t.stop());
+        } finally {
+            proctorStreamRef.current = null;
+            const v = videoRef.current;
+            if (v?.srcObject) {
+                (v.srcObject as MediaStream).getTracks().forEach((t) => t.stop());
+                v.srcObject = null;
+            }
+        }
+    }, []);
 
     // 🎨 PROFESSIONAL THEME PALETTE
     const brand = {
@@ -373,7 +387,8 @@ const StudentDashboard = () => {
 
     // 🛡️ MILITARY GRADE PROCTORING LOGIC
     useEffect(() => {
-        let aiInterval: any;
+        let aiInterval: ReturnType<typeof setInterval> | undefined;
+        let cancelled = false;
         if (activeTest) {
             const savedWarns = localStorage.getItem(`warns_${activeTest.id}`);
             if (savedWarns) setWarnings(parseInt(savedWarns));
@@ -439,47 +454,111 @@ const StudentDashboard = () => {
 
             const setupAI = async () => {
                 try {
-                    await tf.setBackend('webgl');
+                    await tf.setBackend("webgl");
                     const loadedModel = await blazeface.load();
-                    if (navigator.mediaDevices.getUserMedia) {
-                        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                        if (videoRef.current) {
-                            videoRef.current.srcObject = stream;
-                            videoRef.current.onloadeddata = () => {
+                    if (!navigator.mediaDevices?.getUserMedia) {
+                        triggerToast("Camera API not available in this browser.", "error");
+                        return;
+                    }
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: "user" },
+                        audio: false,
+                    });
+                    if (cancelled) {
+                        stream.getTracks().forEach((t) => t.stop());
+                        return;
+                    }
+                    proctorStreamRef.current = stream;
+
+                    let attachAttempts = 0;
+                    let faceLoopStarted = false;
+                    const attachWhenReady = () => {
+                        if (cancelled) {
+                            stream.getTracks().forEach((t) => t.stop());
+                            return;
+                        }
+                        const v = videoRef.current;
+                        if (v) {
+                            v.srcObject = stream;
+                            v.onloadeddata = () => {
+                                if (cancelled || faceLoopStarted) return;
+                                faceLoopStarted = true;
                                 aiInterval = setInterval(async () => {
-                                    if (videoRef.current && videoRef.current.readyState === 4) {
+                                    if (cancelled || !videoRef.current || videoRef.current.readyState !== 4) return;
+                                    try {
                                         const predictions = await loadedModel.estimateFaces(videoRef.current, false);
                                         if (predictions.length === 0) setFaceStatus("missing");
                                         else if (predictions.length > 1) setFaceStatus("multiple");
                                         else setFaceStatus("ok");
+                                    } catch {
+                                        /* ignore frame errors */
                                     }
                                 }, 1000);
                             };
+                            return;
                         }
-                    }
-                } catch (err) { }
+                        if (++attachAttempts < 45) requestAnimationFrame(attachWhenReady);
+                    };
+                    attachWhenReady();
+                } catch (err) {
+                    console.error(err);
+                    triggerToast("Could not start the proctoring camera. Check permissions and try again.", "error");
+                }
             };
-            setupAI();
+            void setupAI();
 
             return () => {
-                clearInterval(timer); clearInterval(aiInterval);
+                cancelled = true;
+                clearInterval(timer);
+                if (aiInterval) clearInterval(aiInterval);
                 document.removeEventListener("fullscreenchange", handleFullScreenChange);
                 document.removeEventListener("visibilitychange", handleVisibilityChange);
-                if (videoRef.current?.srcObject) (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
+                stopProctorCamera();
             };
         }
-    }, [activeTest]);
+    }, [activeTest, stopProctorCamera]);
 
     const handleStartTest = async () => {
         const token = localStorage.getItem("token");
+        const testId = showPassKeyModal;
+        if (testId == null) return;
+
         try {
-            if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen().catch(() => { });
-            const formData = new FormData(); formData.append("pass_key", passKeyInput);
-            const res = await axios.post(`${API_BASE_URL}/code-tests/${showPassKeyModal}/start`, formData, { headers: { Authorization: `Bearer ${token}` } });
+            if (!navigator.mediaDevices?.getUserMedia) {
+                triggerToast("Camera is not supported in this browser. You cannot start the test.", "error");
+                return;
+            }
+            await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: "user" },
+                audio: false,
+            }).then((s) => s.getTracks().forEach((t) => t.stop()));
+        } catch {
+            triggerToast("Camera access is required before the test can begin. Allow the camera and try again.", "error");
+            return;
+        }
+
+        try {
+            const el = document.documentElement;
+            if (el.requestFullscreen) {
+                await el.requestFullscreen();
+            }
+        } catch {
+            triggerToast("Full screen is required for this test. Please allow full screen and try again.", "error");
+            return;
+        }
+
+        try {
+            const formData = new FormData();
+            formData.append("pass_key", passKeyInput);
+            const res = await axios.post(`${API_BASE_URL}/code-tests/${testId}/start`, formData, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
             const prevWarns = localStorage.getItem(`warns_${res.data.id}`);
             if (prevWarns && parseInt(prevWarns) > 2) {
-                if (document.fullscreenElement) document.exitFullscreen();
-                triggerToast("Test Terminated Previously", "error"); return;
+                stopProctorCamera();
+                if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+                triggerToast("Test Terminated Previously", "error");
+                return;
             }
             setActiveTest(res.data);
             setTimeLeft(res.data.time_limit * 60);
@@ -489,7 +568,8 @@ const StudentDashboard = () => {
             setShowPassKeyModal(null);
             setWarnings(prevWarns ? parseInt(prevWarns) : 0);
         } catch (err) {
-            if (document.fullscreenElement) document.exitFullscreen();
+            stopProctorCamera();
+            if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
             triggerToast("Invalid Pass Key", "error");
         }
     };
@@ -745,12 +825,13 @@ const StudentDashboard = () => {
                 problems_solved: disqualified ? 0 : solved,
                 time_taken,
             }, { headers: { Authorization: `Bearer ${token}` } });
+            stopProctorCamera();
+            if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
             setActiveTest(null);
             localStorage.removeItem(`sols_${at.id}`);
             localStorage.removeItem(`passed_${at.id}`);
             passedProblemsRef.current = {};
             setPassedProblems({});
-            if (document.fullscreenElement) document.exitFullscreen();
             triggerToast(disqualified ? "Test Terminated." : "Test submitted successfully!", disqualified ? "error" : "success");
             fetchCodeTests();
         } catch (err) {
@@ -1367,7 +1448,8 @@ const StudentDashboard = () => {
                     <div style={{ background: "white", padding: "30px", borderRadius: "16px", width: "400px", boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)" }}>
                         <div className="flex justify-center mb-4"><div className="bg-blue-50 p-3 rounded-full"><Lock className="text-[#005EB8]" size={32} /></div></div>
                         <h3 style={{ margin: "0 0 10px 0", fontSize: "20px", fontWeight: "800", color: brand.textMain, textAlign: "center" }}>Enter Access Key</h3>
-                        <p className="text-center text-slate-500 text-sm mb-6">This challenge is protected. Enter the pass key provided by your instructor.</p>
+                        <p className="text-center text-slate-500 text-sm mb-2">This challenge is protected. Enter the pass key provided by your instructor.</p>
+                        <p className="text-center text-slate-500 text-xs mb-6 leading-relaxed">When you start, your browser will ask for <strong>camera</strong> access first, then <strong>full screen</strong>, before the test opens. The camera turns off automatically when you finish or leave the test.</p>
                         <input type="text" placeholder="e.g. SECRET123" value={passKeyInput} onChange={(e) => setPassKeyInput(e.target.value)} className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-[#005EB8] text-center font-bold text-lg tracking-widest mb-6" />
                         <div style={{ display: "flex", gap: "10px" }}><button onClick={() => setShowPassKeyModal(null)} style={{ flex: 1, padding: "12px", background: "transparent", border: `1px solid ${brand.border}`, borderRadius: "8px", fontWeight: "bold", color: brand.textLight, cursor: "pointer" }}>Cancel</button><button onClick={handleStartTest} style={{ flex: 1, padding: "12px", background: brand.cloudBlue, border: "none", borderRadius: "8px", fontWeight: "bold", color: "white", cursor: "pointer" }}>Start Test</button></div>
                     </div>

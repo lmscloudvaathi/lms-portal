@@ -41,12 +41,12 @@ const AdminLogin = () => {
 
       const res = await axios.post(`${API_BASE_URL}/login`, loginParams);
 
-      if (res.data.role !== "instructor") {
-        triggerToast("Access Denied. This portal is for Instructors only.", "error");
+      if (res.data.role !== "instructor" && res.data.role !== "admin") {
+        triggerToast("Access Denied. This portal is for instructors and administrators only.", "error");
         setLoading(false); return;
       }
       saveSession(res.data.access_token, res.data.role);
-      triggerToast("Welcome back, Instructor!", "success");
+      triggerToast(res.data.role === "admin" ? "Welcome back, Administrator!" : "Welcome back, Instructor!", "success");
       setTimeout(() => navigate("/dashboard"), 1000);
     } catch (err: any) {
       const detail = err?.response?.data?.detail;

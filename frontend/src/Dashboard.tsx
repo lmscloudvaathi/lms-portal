@@ -53,7 +53,7 @@ const Dashboard = () => {
 
         // 2. Fetch Real Students Count (Only if instructor)
         let studentCount = 0;
-        if (storedRole === "instructor") {
+        if (storedRole === "instructor" || storedRole === "admin") {
           try {
             const studentsRes = await axios.get(`${API_BASE_URL}/admin/students`, config); studentCount = studentsRes.data.length;
           } catch (e) { console.log("Not authorized to fetch students"); }

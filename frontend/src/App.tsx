@@ -177,15 +177,20 @@ function App() {
   );
 }
 
+const isStaffRole = (role: string) => role === "instructor" || role === "admin";
+
 const ProtectedRoute = ({ children, requiredRole }: { children: any, requiredRole?: string }) => {
   const session = getValidSession();
   if (!session?.token) return <Navigate to="/login" replace />;
-  if (session.role !== "instructor" && session.role !== "student") {
+  if (!isStaffRole(session.role) && session.role !== "student") {
     clearSession();
     return <Navigate to="/login" replace />;
   }
-  if (requiredRole && session.role !== requiredRole) {
-    return session.role === "instructor" ? <Navigate to="/dashboard" /> : <Navigate to="/student-dashboard" />;
+  if (requiredRole && requiredRole === "instructor" && !isStaffRole(session.role)) {
+    return <Navigate to="/student-dashboard" replace />;
+  }
+  if (requiredRole && requiredRole === "student" && session.role !== "student") {
+    return isStaffRole(session.role) ? <Navigate to="/dashboard" replace /> : <Navigate to="/login" replace />;
   }
   return children;
 };
@@ -193,21 +198,21 @@ const ProtectedRoute = ({ children, requiredRole }: { children: any, requiredRol
 const PublicOnlyRoute = ({ children }: { children: any }) => {
   const session = getValidSession();
   if (!session?.token) return children;
-  if (session.role !== "instructor" && session.role !== "student") {
+  if (!isStaffRole(session.role) && session.role !== "student") {
     clearSession();
     return children;
   }
-  return session.role === "instructor" ? <Navigate to="/dashboard" replace /> : <Navigate to="/student-dashboard" replace />;
+  return session.role === "student" ? <Navigate to="/student-dashboard" replace /> : <Navigate to="/dashboard" replace />;
 };
 
 const FallbackRoute = () => {
   const session = getValidSession();
   if (!session?.token) return <Navigate to="/" replace />;
-  if (session.role !== "instructor" && session.role !== "student") {
+  if (!isStaffRole(session.role) && session.role !== "student") {
     clearSession();
     return <Navigate to="/" replace />;
   }
-  return session.role === "instructor" ? <Navigate to="/dashboard" replace /> : <Navigate to="/student-dashboard" replace />;
+  return session.role === "student" ? <Navigate to="/student-dashboard" replace /> : <Navigate to="/dashboard" replace />;
 };
 
 export default App;

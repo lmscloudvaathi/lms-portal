@@ -343,6 +343,18 @@ async def require_instructor(current_user: models.User = Depends(get_current_use
         raise HTTPException(status_code=403, detail="⛔ Access Forbidden: Instructors Only")
     return current_user
 
+async def require_instructor_or_admin(current_user: models.User = Depends(get_current_user)):
+    if current_user.role not in ("instructor", "admin"):
+        raise HTTPException(status_code=403, detail="⛔ Access Forbidden: Instructors and administrators only")
+    return current_user
+
+
+def _can_manage_code_test(user: models.User, code_test: models.CodeTest) -> bool:
+    if user.role == "admin":
+        return True
+    return code_test.instructor_id == user.id
+
+
 async def require_student(current_user: models.User = Depends(get_current_user)):
     if current_user.role != "student":
         raise HTTPException(status_code=403, detail="⛔ Access Forbidden: Students Only")
@@ -586,7 +598,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
     token = create_access_token(data={"sub": user.email, "role": user.role})
     return {"access_token": token, "token_type": "bearer", "role": user.role}
 @app.post("/api/v1/admin/admit-student")
-async def admit_single_student(req: AdmitStudentRequest, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
+async def admit_single_student(req: AdmitStudentRequest, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
     # 1. Check if student exists
     result = await db.execute(select(models.User).where(models.User.email == req.email))
     student = result.scalars().first()
@@ -637,7 +649,7 @@ async def admit_single_student(req: AdmitStudentRequest, db: AsyncSession = Depe
         return {"message": f"Existing user enrolled.", "email_status": email_status}
     
 @app.post("/api/v1/admin/bulk-admit")
-async def bulk_admit_students(file: UploadFile = File(...), course_id: int = Form(...), db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
+async def bulk_admit_students(file: UploadFile = File(...), course_id: int = Form(...), db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
     contents = await file.read()
     try:
         df = pd.read_csv(io.BytesIO(contents)) if file.filename.endswith('.csv') else pd.read_excel(io.BytesIO(contents))
@@ -715,7 +727,7 @@ async def generate_problem_content(req: AIGenerateRequest):
     except Exception as e: raise HTTPException(status_code=500, detail=f"AI Error: {str(e)}")
 
 @app.post("/api/v1/code-tests")
-async def create_code_test(test: CodeTestCreate, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
+async def create_code_test(test: CodeTestCreate, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
     new_test = models.CodeTest(title=test.title, pass_key=test.pass_key, time_limit=test.time_limit, instructor_id=current_user.id)
     db.add(new_test)
     await db.commit()
@@ -740,9 +752,12 @@ async def get_course_details(course_id: int, db: AsyncSession = Depends(get_db))
 
 @app.get("/api/v1/code-tests")
 async def get_code_tests(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    # 1. Instructor View: Show ALL their created tests
-    if current_user.role == "instructor": 
+    # 1. Instructor: own tests. Admin: all tests (manage / edit).
+    if current_user.role == "instructor":
         res = await db.execute(select(models.CodeTest).where(models.CodeTest.instructor_id == current_user.id))
+        return res.scalars().all()
+    if current_user.role == "admin":
+        res = await db.execute(select(models.CodeTest).order_by(models.CodeTest.id.desc()))
         return res.scalars().all()
     
     # 2. Student View: Show ONLY Pending/Active tests
@@ -795,10 +810,10 @@ async def submit_test_result(sub: TestSubmission, db: AsyncSession = Depends(get
     return {"message": "Submitted"}
 
 @app.get("/api/v1/code-tests/{test_id}/results")
-async def get_test_results(test_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
+async def get_test_results(test_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
     res_ct = await db.execute(select(models.CodeTest).where(models.CodeTest.id == test_id))
     code_test = res_ct.scalars().first()
-    if not code_test or code_test.instructor_id != current_user.id:
+    if not code_test or not _can_manage_code_test(current_user, code_test):
         raise HTTPException(status_code=403, detail="Not authorized")
 
     cnt_q = await db.execute(select(func.count(models.Problem.id)).where(models.Problem.test_id == test_id))
@@ -828,18 +843,68 @@ async def get_test_results(test_id: int, db: AsyncSession = Depends(get_db), cur
     return out
 
 @app.delete("/api/v1/code-tests/{test_id}")
-async def delete_code_test(test_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
+async def delete_code_test(test_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
     res = await db.execute(select(models.CodeTest).where(models.CodeTest.id == test_id))
     test = res.scalars().first()
     if not test:
         raise HTTPException(status_code=404, detail="Challenge not found")
-    if test.instructor_id != current_user.id:
+    if not _can_manage_code_test(current_user, test):
         raise HTTPException(status_code=403, detail="Not authorized")
     await db.execute(delete(models.TestResult).where(models.TestResult.test_id == test_id))
     await db.execute(delete(models.Problem).where(models.Problem.test_id == test_id))
     await db.execute(delete(models.CodeTest).where(models.CodeTest.id == test_id))
     await db.commit()
     return {"message": "Challenge deleted"}
+
+
+@app.get("/api/v1/code-tests/{test_id}/manage")
+async def get_code_test_manage(test_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
+    res = await db.execute(
+        select(models.CodeTest).options(selectinload(models.CodeTest.problems)).where(models.CodeTest.id == test_id)
+    )
+    t = res.scalars().first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Challenge not found")
+    if not _can_manage_code_test(current_user, t):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    problems_sorted = sorted(t.problems, key=lambda p: p.id)
+    return {
+        "id": t.id,
+        "title": t.title,
+        "pass_key": t.pass_key,
+        "time_limit": t.time_limit,
+        "problems": [
+            {"title": p.title, "description": p.description, "difficulty": p.difficulty, "test_cases": p.test_cases}
+            for p in problems_sorted
+        ],
+    }
+
+
+@app.patch("/api/v1/code-tests/{test_id}")
+async def update_code_test(test_id: int, test: CodeTestCreate, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
+    res = await db.execute(select(models.CodeTest).where(models.CodeTest.id == test_id))
+    existing = res.scalars().first()
+    if not existing:
+        raise HTTPException(status_code=404, detail="Challenge not found")
+    if not _can_manage_code_test(current_user, existing):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    existing.title = test.title
+    existing.pass_key = test.pass_key
+    existing.time_limit = test.time_limit
+    await db.execute(delete(models.Problem).where(models.Problem.test_id == test_id))
+    for prob in test.problems:
+        db.add(
+            models.Problem(
+                test_id=test_id,
+                title=prob.title,
+                description=prob.description,
+                difficulty=prob.difficulty,
+                test_cases=prob.test_cases,
+            )
+        )
+    await db.commit()
+    return {"message": "Challenge updated successfully"}
 
 
 def _normalize_judge_text(s: Any) -> str:
@@ -913,6 +978,8 @@ async def _resolve_execute_test_cases(
     if current_user.role == "instructor":
         if code_test.instructor_id != current_user.id:
             raise HTTPException(status_code=403, detail="Not authorized")
+    elif current_user.role == "admin":
+        pass
     elif current_user.role == "student":
         done = await db.execute(
             select(models.TestResult).where(
@@ -1022,6 +1089,9 @@ async def execute_code(
 async def get_courses(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if current_user.role == "instructor":
         res = await db.execute(select(models.Course).where(models.Course.instructor_id == current_user.id))
+        return res.scalars().all()
+    if current_user.role == "admin":
+        res = await db.execute(select(models.Course).order_by(models.Course.id.desc()))
         return res.scalars().all()
     res = await db.execute(select(models.Course).where(models.Course.is_published == True))
     return res.scalars().all()
@@ -1764,7 +1834,7 @@ async def confirm_submission(req: ConfirmationRequest, db: AsyncSession = Depend
 # In main.py
 
 @app.get("/api/v1/admin/students")
-async def get_all_students(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
+async def get_all_students(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
     # 1. REMOVED THE BROAD TRY/EXCEPT BLOCK so real errors raise 500 instead of returning []
     
     # Optimized: Fetch students + enrollments + course names
@@ -1810,7 +1880,7 @@ async def get_all_students(db: AsyncSession = Depends(get_db), current_user: mod
     return real_data
 
 @app.delete("/api/v1/admin/students/{user_id}")
-async def delete_student(user_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
+async def delete_student(user_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
     # 1. Find the student
     res = await db.execute(select(models.User).where(models.User.id == user_id))
     student = res.scalars().first()
@@ -1853,7 +1923,7 @@ async def delete_student(user_id: int, db: AsyncSession = Depends(get_db), curre
 
 # --- 🆕 ADD THIS TO main.py ---
 @app.patch("/api/v1/admin/students/{user_id}/reset-password")
-async def reset_student_password(user_id: int, req: PasswordChange, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
+async def reset_student_password(user_id: int, req: PasswordChange, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
     # 1. Find Student
     result = await db.execute(select(models.User).where(models.User.id == user_id))
     student = result.scalars().first()
@@ -2097,7 +2167,7 @@ async def get_course_challenges(course_id: int, db: AsyncSession = Depends(get_d
     return final_response
 # 3️⃣ ADD CREATE CHALLENGE
 @app.post("/api/v1/courses/{course_id}/challenges")
-async def create_course_challenge(course_id: int, challenge: ChallengeCreate, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
+async def create_course_challenge(course_id: int, challenge: ChallengeCreate, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
     new_challenge = models.CourseChallenge(
         title=challenge.title,
         description=challenge.description,
@@ -2294,7 +2364,7 @@ async def read_users_me(current_user: models.User = Depends(get_current_user)):
     }
 
 @app.post("/api/v1/admin/trigger-backup")
-async def manual_backup(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
+async def manual_backup(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
     # Run the backup synchronously
     backup_path = backup_manager.create_local_backup()
     if backup_path:
@@ -2332,7 +2402,7 @@ async def mark_challenge_solved(challenge_id: int, db: AsyncSession = Depends(ge
     return {"status": "success", "message": "Challenge marked as solved"}
 
 @app.patch("/api/v1/challenges/{challenge_id}")
-async def update_challenge(challenge_id: int, update: ChallengeUpdate, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
+async def update_challenge(challenge_id: int, update: ChallengeUpdate, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
     res = await db.execute(select(models.CourseChallenge).where(models.CourseChallenge.id == challenge_id))
     challenge = res.scalars().first()
     
@@ -2349,7 +2419,7 @@ async def update_challenge(challenge_id: int, update: ChallengeUpdate, db: Async
     return {"message": "Challenge updated successfully"}
 
 @app.delete("/api/v1/challenges/{challenge_id}")
-async def delete_challenge(challenge_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
+async def delete_challenge(challenge_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
     res = await db.execute(select(models.CourseChallenge).where(models.CourseChallenge.id == challenge_id))
     challenge = res.scalars().first()
     

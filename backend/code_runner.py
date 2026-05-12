@@ -56,6 +56,9 @@ def run_python_local(source_code: str, test_cases: List[Dict[str, Any]]) -> Dict
     work = _work_dir()
     try:
         script_path = os.path.join(work, "runner.py")
+        # Pass test cases as JSON text into json.loads(...) so `false`/`true`/`null`
+        # are valid (they must not appear as bare Python identifiers in the generated file).
+        cases_payload = json.dumps(test_cases)
         driver_code = f"""
 import json
 
@@ -64,7 +67,7 @@ import json
 # -------- USER CODE END ----------
 
 def main():
-    cases = {json.dumps(test_cases)}
+    cases = json.loads({repr(cases_payload)})
 
     solve_fn = globals().get("solve")
     if not callable(solve_fn):
