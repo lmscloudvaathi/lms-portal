@@ -106,9 +106,9 @@ const CodeArena = () => {
             return;
         }
 
-        const headers = "Student Name,Problems Solved,Time Taken\n";
+        const headers = "Student Name,Email,Problems Solved,Total Problems,Score %,Time Taken,Submitted At\n";
         const rows = selectedTestResults.map(r =>
-            `${r.student_name},${r.problems_solved},${r.time_taken}`
+            `${r.student_name},${r.email ?? ""},${r.problems_solved},${r.total_problems ?? ""},${r.completion_percent ?? r.score},${r.time_taken},${r.submitted_at ?? ""}`
         ).join("\n");
 
         const csvContent = "data:text/csv;charset=utf-8," + headers + rows;
@@ -424,8 +424,10 @@ const CodeArena = () => {
                                             <thead>
                                                 <tr className="border-b border-[#cbd5e1] text-[#475569] text-xs uppercase tracking-wider">
                                                     <th className="p-4 font-extrabold whitespace-nowrap">Student Name</th>
-                                                    <th className="p-4 font-extrabold text-center whitespace-nowrap">Problems Solved</th>
+                                                    <th className="p-4 font-extrabold text-center whitespace-nowrap">Completion</th>
+                                                    <th className="p-4 font-extrabold text-center whitespace-nowrap">Score</th>
                                                     <th className="p-4 font-extrabold text-center whitespace-nowrap">Time Taken</th>
+                                                    <th className="p-4 font-extrabold text-center whitespace-nowrap">Submitted</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="text-sm text-[#1e293b]">
@@ -433,12 +435,19 @@ const CodeArena = () => {
                                                     <tr key={idx} className="border-b border-[#e2e8f0] hover:bg-white transition-colors">
                                                         <td className="p-4 font-semibold flex items-center gap-3 whitespace-nowrap">
                                                             <div className="w-8 h-8 rounded-full bg-[#005EB8] text-white flex items-center justify-center text-xs font-bold">{result.student_name.charAt(0)}</div>
-                                                            {result.student_name}
+                                                            <div className="flex flex-col">
+                                                                <span>{result.student_name}</span>
+                                                                {result.email && <span className="text-[11px] font-normal text-slate-500">{result.email}</span>}
+                                                            </div>
                                                         </td>
                                                         <td className="p-4 text-center whitespace-nowrap">
-                                                            <span className="bg-green-100 text-green-700 px-2 py-1 rounded font-bold text-xs">{result.problems_solved} Solved</span>
+                                                            <span className="bg-green-100 text-green-700 px-2 py-1 rounded font-bold text-xs">
+                                                                {result.completion_label ?? `${result.problems_solved}/${result.total_problems ?? "?"}`}
+                                                            </span>
                                                         </td>
+                                                        <td className="p-4 text-center font-bold text-slate-700">{result.completion_percent ?? result.score}%</td>
                                                         <td className="p-4 text-center font-mono text-[#64748b] whitespace-nowrap">{result.time_taken}</td>
+                                                        <td className="p-4 text-center text-[#64748b] text-xs whitespace-nowrap">{result.submitted_at}</td>
                                                     </tr>
                                                 ))}
                                             </tbody>

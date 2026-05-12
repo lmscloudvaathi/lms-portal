@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import Editor from "@monaco-editor/react";
@@ -7,7 +7,7 @@ import { runTestCasesLocally } from './utils/pyodideEnv';
 import {
     LayoutDashboard, BookOpen, Compass, Award, LogOut,
     CheckCircle, AlertTriangle, X,
-    Code, Play, Monitor, ChevronRight, Cloud,
+    Code, Play, Monitor, ChevronRight, Cloud, Flag,
     Menu, Sparkles, Zap, User, PlayCircle, Trophy, Lock, BellRing, Trash2, Settings, Download, Clock
 } from "lucide-react";
 import { motion } from "framer-motion";
@@ -204,7 +204,7 @@ const StudentDashboard = () => {
     const [showPassKeyModal, setShowPassKeyModal] = useState<number | null>(null);
 
     // --- 🛡️ PROCTORING STATES ---
-    const [, setTimeLeft] = useState(0);
+    const [timeLeft, setTimeLeft] = useState(0);
     const [warnings, setWarnings] = useState(0);
     const [faceStatus, setFaceStatus] = useState<"ok" | "missing" | "multiple">("ok");
     const [isFullScreenViolation, setIsFullScreenViolation] = useState(false);
@@ -220,6 +220,11 @@ const StudentDashboard = () => {
     // ✅ NEW: Strict "Unlock Submit" State
     const [canSubmit, setCanSubmit] = useState(false);
 
+    const activeTestRef = useRef<CodeTest | null>(null);
+    const timeLeftRef = useRef(0);
+    const passedProblemsRef = useRef<Record<number, boolean>>({});
+    const [passedProblems, setPassedProblems] = useState<Record<number, boolean>>({});
+
     const videoRef = useRef<HTMLVideoElement>(null);
 
     // 🎨 PROFESSIONAL THEME PALETTE
@@ -233,6 +238,9 @@ const StudentDashboard = () => {
         { id: 54, name: "C++ (GCC 9.2.0)", value: "cpp" },
         { id: 63, name: "JavaScript (Node.js)", value: "javascript" },
     ];
+
+    activeTestRef.current = activeTest;
+    timeLeftRef.current = timeLeft;
 
     // ✅ Toast Helper
     const triggerToast = (message: string, type: "success" | "error" = "success") => {
@@ -374,10 +382,32 @@ const StudentDashboard = () => {
                 const parsed = JSON.parse(savedSolutions);
                 setSolutions(parsed);
                 setUserCode(parsed[0] || CODE_TEMPLATES.python);
-            } else setUserCode(CODE_TEMPLATES.python);
+            } else {
+                setUserCode(CODE_TEMPLATES.python);
+            }
+            const savedPassed = localStorage.getItem(`passed_${activeTest.id}`);
+            if (savedPassed) {
+                try {
+                    const p = JSON.parse(savedPassed) as Record<number, boolean>;
+                    passedProblemsRef.current = p;
+                    setPassedProblems(p);
+                } catch {
+                    passedProblemsRef.current = {};
+                    setPassedProblems({});
+                }
+            } else {
+                passedProblemsRef.current = {};
+                setPassedProblems({});
+            }
 
             const timer = setInterval(() => {
-                setTimeLeft(prev => { if (prev <= 1) { submitTest(); return 0; } return prev - 1; });
+                setTimeLeft((prev) => {
+                    if (prev <= 1) {
+                        void submitTest(false);
+                        return 0;
+                    }
+                    return prev - 1;
+                });
             }, 1000);
 
             const triggerViolation = (type: string) => {
@@ -451,7 +481,13 @@ const StudentDashboard = () => {
                 if (document.fullscreenElement) document.exitFullscreen();
                 triggerToast("Test Terminated Previously", "error"); return;
             }
-            setActiveTest(res.data); setTimeLeft(res.data.time_limit * 60); setShowPassKeyModal(null); setWarnings(prevWarns ? parseInt(prevWarns) : 0);
+            setActiveTest(res.data);
+            setTimeLeft(res.data.time_limit * 60);
+            setCurrentProblemIndex(0);
+            setPassedProblems({});
+            passedProblemsRef.current = {};
+            setShowPassKeyModal(null);
+            setWarnings(prevWarns ? parseInt(prevWarns) : 0);
         } catch (err) {
             if (document.fullscreenElement) document.exitFullscreen();
             triggerToast("Invalid Pass Key", "error");
@@ -659,8 +695,11 @@ const StudentDashboard = () => {
                 setConsoleOutput(`🎉 Challenge Solved! All ${totalCount} test cases passed.\n\nRuntime: ${report.stats?.runtime_ms ?? "—"}ms`);
                 triggerToast("🎉 Challenge Solved!", "success");
 
-                // ✅ ONLY SAVE PROGRESS HERE
                 handleSave();
+                const nextPassed = { ...passedProblemsRef.current, [currentProblemIndex]: true };
+                passedProblemsRef.current = nextPassed;
+                setPassedProblems(nextPassed);
+                if (activeTest) localStorage.setItem(`passed_${activeTest.id}`, JSON.stringify(nextPassed));
             } else {
                 setExecutionStatus("error");
                 const fail = (report.results as any[])?.find((r: any) => r && r.status !== "Passed");
@@ -687,17 +726,65 @@ const StudentDashboard = () => {
     };
 
     const submitTest = async (disqualified = false) => {
-        if (!activeTest) return;
+        const at = activeTestRef.current;
+        if (!at) return;
+        const token = localStorage.getItem("token");
+        const n = at.problems.length;
+        let solved = 0;
+        for (let i = 0; i < n; i++) if (passedProblemsRef.current[i]) solved++;
+        const score = disqualified ? 0 : Math.round((solved / Math.max(n, 1)) * 100);
+        const limitSec = at.time_limit * 60;
+        const elapsed = Math.max(0, limitSec - timeLeftRef.current);
+        const mm = Math.floor(elapsed / 60);
+        const ss = elapsed % 60;
+        const time_taken = disqualified ? "Terminated" : `${mm}m ${ss}s`;
         try {
             await axios.post(`${API_BASE_URL}/code-tests/submit`, {
-                test_id: activeTest.id, score: disqualified ? 0 : (executionStatus === "success" ? 100 : 40),
-                problems_solved: Object.keys(solutions).length, time_taken: "Finished"
-            }, { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } });
-            setActiveTest(null); localStorage.removeItem(`sols_${activeTest.id}`);
+                test_id: at.id,
+                score,
+                problems_solved: disqualified ? 0 : solved,
+                time_taken,
+            }, { headers: { Authorization: `Bearer ${token}` } });
+            setActiveTest(null);
+            localStorage.removeItem(`sols_${at.id}`);
+            localStorage.removeItem(`passed_${at.id}`);
+            passedProblemsRef.current = {};
+            setPassedProblems({});
             if (document.fullscreenElement) document.exitFullscreen();
-            triggerToast(disqualified ? "Test Terminated." : "Test Submitted Successfully!", disqualified ? "error" : "success");
-        } catch (err) { }
+            triggerToast(disqualified ? "Test Terminated." : "Test submitted successfully!", disqualified ? "error" : "success");
+            fetchCodeTests();
+        } catch (err) {
+            triggerToast("Could not submit test.", "error");
+        }
     };
+
+    const finishTestEarly = async () => {
+        const at = activeTest;
+        if (!at) return;
+        const n = at.problems.length;
+        let solved = 0;
+        for (let i = 0; i < n; i++) if (passedProblemsRef.current[i]) solved++;
+        if (solved < n) {
+            triggerToast(`Solve all ${n} problems first (${solved}/${n} passed).`, "error");
+            return;
+        }
+        await submitTest(false);
+    };
+
+    const codeArenaAllPassed = useMemo(() => {
+        if (!activeTest) return false;
+        const tot = activeTest.problems.length;
+        let ok = 0;
+        for (let i = 0; i < tot; i++) if (passedProblems[i]) ok++;
+        return tot > 0 && ok === tot;
+    }, [activeTest, passedProblems]);
+
+    const codeArenaSolvedCount = useMemo(() => {
+        if (!activeTest) return 0;
+        let ok = 0;
+        for (let i = 0; i < activeTest.problems.length; i++) if (passedProblems[i]) ok++;
+        return ok;
+    }, [activeTest, passedProblems]);
 
     const handleFreeEnroll = async (courseId: number) => {
         setProcessing(true);
@@ -819,9 +906,15 @@ const StudentDashboard = () => {
 
                 {/* LEFT PANEL: Question & Cam */}
                 <div className="w-full lg:w-[35%] h-[40%] lg:h-full flex flex-col border-b lg:border-b-0 lg:border-r border-slate-300 bg-white shadow-lg z-10">
-                    <div className="h-12 lg:h-16 border-b border-slate-200 flex items-center px-4 lg:px-6 bg-white shrink-0">
-                        <h3 className="text-lg lg:text-2xl font-extrabold text-slate-800 truncate">problem {currentProblemIndex + 1}</h3>
-                        <span className="ml-auto bg-yellow-100 text-yellow-700 text-[10px] lg:text-xs font-bold px-2 py-1 rounded">MEDIUM</span>
+                    <div className="h-12 lg:h-16 border-b border-slate-200 flex items-center px-4 lg:px-6 bg-white shrink-0 gap-2 flex-wrap">
+                        <h3 className="text-lg lg:text-2xl font-extrabold text-slate-800 truncate">Problem {currentProblemIndex + 1}</h3>
+                        <span className="ml-auto bg-blue-50 text-blue-800 text-[10px] lg:text-xs font-bold px-2 py-1 rounded whitespace-nowrap">
+                            {codeArenaSolvedCount}/{activeTest.problems.length} done
+                        </span>
+                        <span className="bg-slate-900 text-white text-[10px] lg:text-xs font-mono font-bold px-2 py-1 rounded whitespace-nowrap">
+                            {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, "0")}
+                        </span>
+                        <span className="bg-yellow-100 text-yellow-700 text-[10px] lg:text-xs font-bold px-2 py-1 rounded">MEDIUM</span>
                     </div>
                     <div className="flex-1 overflow-y-auto p-4 lg:p-6 bg-white">
                         <p className="text-slate-500 mb-6 italic">No description provided.</p>
@@ -861,24 +954,38 @@ const StudentDashboard = () => {
                         <pre className={`whitespace-pre-wrap flex-1 ${executionStatus === "error" ? "text-red-400" : "text-green-400"}`}>{executionStatus === "running" ? <span className="text-yellow-400">Compiling...</span> : consoleOutput}</pre>
                     </div>
 
-                    <div className="h-14 lg:h-16 bg-white border-t border-slate-200 flex items-center justify-end px-4 lg:px-6 gap-2 lg:gap-4 shrink-0">
-                        <button onClick={() => switchQuestion(currentProblemIndex + 1 < activeTest.problems.length ? currentProblemIndex + 1 : 0)} className="flex items-center gap-2 px-4 py-2 lg:px-6 lg:py-2.5 rounded-lg border border-slate-300 text-slate-700 font-bold text-xs lg:text-sm hover:bg-slate-50 transition-colors"><ChevronRight size={14} className="lg:w-4 lg:h-4" /> <span className="hidden sm:inline">Next</span></button>
+                    <div className="h-14 lg:h-16 bg-white border-t border-slate-200 flex items-center justify-end px-2 lg:px-6 gap-2 lg:gap-3 shrink-0 flex-wrap">
+                        <button type="button" onClick={() => switchQuestion(currentProblemIndex + 1 < activeTest.problems.length ? currentProblemIndex + 1 : 0)} className="flex items-center gap-2 px-3 py-2 lg:px-6 lg:py-2.5 rounded-lg border border-slate-300 text-slate-700 font-bold text-xs lg:text-sm hover:bg-slate-50 transition-colors"><ChevronRight size={14} className="lg:w-4 lg:h-4" /> <span className="hidden sm:inline">Next</span></button>
 
                         {/* 🟢 Run Code (Dry Run) */}
-                        <button onClick={handleRunCode} disabled={executionStatus === "running"} className="flex items-center gap-2 px-4 py-2 lg:px-6 lg:py-2.5 rounded-lg bg-slate-200 text-slate-700 font-bold text-xs lg:text-sm hover:bg-slate-300 transition-colors"><Play size={14} fill="currentColor" className="lg:w-4 lg:h-4" /> Run Code</button>
+                        <button onClick={handleRunCode} disabled={executionStatus === "running"} className="flex items-center gap-2 px-3 py-2 lg:px-6 lg:py-2.5 rounded-lg bg-slate-200 text-slate-700 font-bold text-xs lg:text-sm hover:bg-slate-300 transition-colors"><Play size={14} fill="currentColor" className="lg:w-4 lg:h-4" /> Run Code</button>
 
                         {/* 🔵 Submit (Official Grading) */}
                         <button
                             onClick={handleSubmit}
                             disabled={executionStatus === "running" || !canSubmit}
                             title={!canSubmit ? "Run code successfully first" : "Submit solution"}
-                            className={`flex items-center gap-2 px-4 py-2 lg:px-8 lg:py-2.5 rounded-lg border font-bold text-xs lg:text-sm shadow-md transition-all
+                            className={`flex items-center gap-2 px-3 py-2 lg:px-6 lg:py-2.5 rounded-lg border font-bold text-xs lg:text-sm shadow-md transition-all
                             ${canSubmit
                                     ? "bg-[#005EB8] text-white hover:bg-blue-700 border-transparent"
                                     : "bg-slate-200 text-slate-400 border-slate-300 cursor-not-allowed"
                                 }`}
                         >
                             <Cloud size={14} className="lg:w-4 lg:h-4" /> Submit
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={finishTestEarly}
+                            disabled={executionStatus === "running" || !codeArenaAllPassed}
+                            title="Submit the test after all problems pass official grading"
+                            className={`flex items-center gap-2 px-3 py-2 lg:px-8 lg:py-2.5 rounded-lg font-bold text-xs lg:text-sm shadow-md transition-all
+                                ${codeArenaAllPassed
+                                    ? "bg-[#87C232] text-white hover:bg-[#76a82b] border border-transparent"
+                                    : "bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed"
+                                }`}
+                        >
+                            <Flag size={14} className="lg:w-4 lg:h-4" /> Finish
                         </button>
                     </div>
                 </div>

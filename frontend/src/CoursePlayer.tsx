@@ -10,7 +10,7 @@ import {
     PlayCircle, FileText, ChevronLeft, Menu, Code, HelpCircle,
     UploadCloud, Play, Save, Monitor, Cpu, ChevronDown, ChevronRight, CreditCard,
     File as FileIcon, X, CheckCircle, Radio, Lock, ArrowLeft, AlertCircle, Clock,
-    Zap, CheckSquare, Square, CheckCheck, Award, Edit, AlertTriangle, Maximize, Minimize, LockKeyhole, Cloud, Link as ResourceLinkIcon // <--- Added 'Cloud' icon here
+    Zap, CheckSquare, Square, CheckCheck, Award, Edit, AlertTriangle, Maximize, Minimize, LockKeyhole, Cloud, Flag, Link as ResourceLinkIcon // <--- Added 'Cloud' icon here
 } from "lucide-react";
 import { CODE_TEMPLATES } from './utils/codeTemplates';
 
@@ -50,7 +50,7 @@ const ToastNotification = ({ toast, setToast }: any) => {
 
 // --- 💻 COMPONENT: CODE COMPILER (For Standard Lessons) ---
 // Updated to send 'test_cases' array instead of 'stdin'
-const CodeCompiler = ({ lesson }: { lesson: any }) => {
+const CodeCompiler = ({ lesson, contentItemId, onLessonComplete }: { lesson: any; contentItemId?: number; onLessonComplete?: () => void }) => {
     const [toast, setToast] = useState({ show: false, message: "", type: "success" });
     const triggerToast = (message: string, type: "success" | "error" = "success") => {
         setToast({ show: true, message, type });
@@ -74,10 +74,29 @@ const CodeCompiler = ({ lesson }: { lesson: any }) => {
     };
 
     const [code, setCode] = useState(CODE_TEMPLATES.python);
+    const [codeByProblem, setCodeByProblem] = useState<Record<number, string>>({});
+    const [solvedProblems, setSolvedProblems] = useState<Record<number, boolean>>({});
+    const [finishing, setFinishing] = useState(false);
     const [output, setOutput] = useState("Ready to execute...");
     const [loading, setLoading] = useState(false);
     const [language, setLanguage] = useState(71);
     const [canSubmit, setCanSubmit] = useState(false); // ✅ Strict Unlock
+
+    const totalProblems = problems.length;
+    const solvedCount = useMemo(() => problems.reduce((n: number, _: any, i: number) => n + (solvedProblems[i] ? 1 : 0), 0), [problems, solvedProblems]);
+    const allSolved = totalProblems > 0 && solvedCount === totalProblems;
+
+    const selectProblem = (idx: number) => {
+        if (idx === activeProblemIndex) return;
+        setCodeByProblem((prev) => {
+            const next = { ...prev, [activeProblemIndex]: code };
+            setCode(next[idx] ?? CODE_TEMPLATES.python);
+            return next;
+        });
+        setActiveProblemIndex(idx);
+        setCanSubmit(false);
+        setOutput("Ready to execute...");
+    };
 
     const languages = [
         { id: 71, name: "Python (3.8.1)", value: "python" },
@@ -188,7 +207,8 @@ const CodeCompiler = ({ lesson }: { lesson: any }) => {
 
                 if (report.stats.total > 0 && report.stats.passed === report.stats.total) {
                     triggerToast("All Test Cases Passed!", "success");
-                    // Optional: Save code on success
+                    setSolvedProblems((prev) => ({ ...prev, [activeProblemIndex]: true }));
+                    setCodeByProblem((prev) => ({ ...prev, [activeProblemIndex]: code }));
                 } else {
                     triggerToast("Some test cases failed", "error");
                 }
@@ -202,7 +222,30 @@ const CodeCompiler = ({ lesson }: { lesson: any }) => {
         }
     };
 
+    const handleFinishLesson = async () => {
+        if (!contentItemId) {
+            triggerToast("Cannot mark complete: missing lesson id.", "error");
+            return;
+        }
+        if (!allSolved) {
+            triggerToast(`Solve all problems first (${solvedCount}/${totalProblems}).`, "error");
+            return;
+        }
+        setFinishing(true);
+        try {
+            const token = localStorage.getItem("token");
+            await axios.post(`${API_BASE_URL}/content/${contentItemId}/complete`, {}, { headers: { Authorization: `Bearer ${token}` } } });
+            triggerToast("Lesson finished and marked complete!", "success");
+            onLessonComplete?.();
+        } catch (e: any) {
+            triggerToast(e?.response?.data?.detail || "Could not mark lesson complete.", "error");
+        } finally {
+            setFinishing(false);
+        }
+    };
+
     const saveProgress = () => {
+        setCodeByProblem((prev) => ({ ...prev, [activeProblemIndex]: code }));
         triggerToast("Code Saved Successfully!", "success");
     };
 
@@ -219,13 +262,20 @@ const CodeCompiler = ({ lesson }: { lesson: any }) => {
             {/* Left Panel: Problems */}
             <div className="w-full lg:w-[40%] h-[400px] lg:h-full flex flex-col gap-4 shrink-0">
                 <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 p-4 lg:p-6 overflow-y-auto">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1">
+                        <span className="text-xs font-bold text-slate-600">Progress: <span className="text-blue-700">{solvedCount}</span> / {totalProblems} solved</span>
+                        {allSolved && (
+                            <span className="text-xs font-bold text-green-700 flex items-center gap-1"><CheckCircle size={14} /> All problems passed — tap Finish below</span>
+                        )}
+                    </div>
                     <div className="flex gap-2 mb-6 border-b border-slate-100 pb-2 overflow-x-auto">
                         {problems.map((_: any, idx: number) => (
                             <button
                                 key={idx}
-                                onClick={() => { setActiveProblemIndex(idx); setOutput("Ready to execute..."); setCanSubmit(false); }}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 ${activeProblemIndex === idx ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}
+                                onClick={() => selectProblem(idx)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 flex items-center gap-1 ${activeProblemIndex === idx ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}
                             >
+                                {solvedProblems[idx] ? <CheckCircle size={14} className={activeProblemIndex === idx ? "text-white" : "text-green-600"} /> : null}
                                 Problem {idx + 1}
                             </button>
                         ))}
@@ -277,17 +327,30 @@ const CodeCompiler = ({ lesson }: { lesson: any }) => {
                         <div className="bg-slate-800 text-slate-400 px-4 py-2 text-xs font-bold uppercase tracking-wider flex items-center gap-2"><Monitor size={14} /> Terminal Output</div>
                         <div className="flex-1 p-4 font-mono text-xs lg:text-sm text-green-400 overflow-y-auto whitespace-pre-wrap">{output}</div>
                     </div>
-                    <div className="flex-[0.2] flex gap-3">
-                        <button onClick={saveProgress} className="bg-white border-2 border-slate-200 text-slate-700 hover:border-slate-300 hover:bg-slate-50 font-bold rounded-xl flex items-center justify-center gap-2 transition-all p-2"><Save size={18} /></button>
-                        <button onClick={handleRunCode} disabled={loading} className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-70 text-sm lg:text-base p-2">{loading ? <Cpu size={18} className="animate-spin" /> : <Play size={18} />} Run Code</button>
-                        <button
-                            onClick={handleSubmit}
-                            disabled={loading || !canSubmit}
-                            title={!canSubmit ? "Run code successfully first" : "Submit solution"}
-                            className={`flex-1 font-bold rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-70 text-sm lg:text-base p-2 ${canSubmit ? "bg-[#005EB8] hover:bg-[#004a94] text-white" : "bg-slate-300 text-slate-500 cursor-not-allowed"}`}
-                        >
-                            {loading ? <div className="animate-spin h-4 w-4 border-2 border-white rounded-full border-t-transparent"></div> : <Cloud size={18} />} Submit
-                        </button>
+                    <div className="flex-[0.2] flex flex-col gap-2">
+                        <div className="flex gap-3">
+                            <button onClick={saveProgress} className="bg-white border-2 border-slate-200 text-slate-700 hover:border-slate-300 hover:bg-slate-50 font-bold rounded-xl flex items-center justify-center gap-2 transition-all p-2"><Save size={18} /></button>
+                            <button onClick={handleRunCode} disabled={loading} className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-70 text-sm lg:text-base p-2">{loading ? <Cpu size={18} className="animate-spin" /> : <Play size={18} />} Run Code</button>
+                            <button
+                                onClick={handleSubmit}
+                                disabled={loading || !canSubmit}
+                                title={!canSubmit ? "Run code successfully first" : "Submit solution"}
+                                className={`flex-1 font-bold rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-70 text-sm lg:text-base p-2 ${canSubmit ? "bg-[#005EB8] hover:bg-[#004a94] text-white" : "bg-slate-300 text-slate-500 cursor-not-allowed"}`}
+                            >
+                                {loading ? <div className="animate-spin h-4 w-4 border-2 border-white rounded-full border-t-transparent"></div> : <Cloud size={18} />} Submit
+                            </button>
+                        </div>
+                        {contentItemId ? (
+                            <button
+                                type="button"
+                                onClick={handleFinishLesson}
+                                disabled={finishing || !allSolved}
+                                title={allSolved ? "Mark this lesson as complete" : `Solve all problems (${solvedCount}/${totalProblems})`}
+                                className={`w-full py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${allSolved ? "bg-[#87C232] hover:bg-[#76a82b] text-white" : "bg-slate-200 text-slate-500 cursor-not-allowed"}`}
+                            >
+                                {finishing ? <Cpu size={18} className="animate-spin" /> : <Flag size={18} />} Finish lesson
+                            </button>
+                        ) : null}
                     </div>
                 </div>
             </div>
@@ -1372,7 +1435,9 @@ const CoursePlayer = () => {
             );
         }
         else if (activeLesson.type === "live_test") contentBody = <LiveTestProctor lesson={activeLesson} />;
-        else if (activeLesson.type === "code_test") contentBody = <CodeCompiler lesson={activeLesson} />;
+        else if (activeLesson.type === "code_test") contentBody = (
+            <CodeCompiler lesson={activeLesson} contentItemId={activeLesson.id} onLessonComplete={() => setRefreshTrigger((p) => p + 1)} />
+        );
         else if (activeLesson.type === "assignment") {
             contentBody = (
                 <div className="flex flex-col items-center justify-center h-full bg-[#F8FAFC] p-8 font-sans text-slate-800">

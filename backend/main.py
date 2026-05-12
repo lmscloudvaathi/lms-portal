@@ -796,10 +796,36 @@ async def submit_test_result(sub: TestSubmission, db: AsyncSession = Depends(get
 
 @app.get("/api/v1/code-tests/{test_id}/results")
 async def get_test_results(test_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
-    # Eager load student details
-    res = await db.execute(select(models.TestResult).options(selectinload(models.TestResult.student)).where(models.TestResult.test_id == test_id))
+    res_ct = await db.execute(select(models.CodeTest).where(models.CodeTest.id == test_id))
+    code_test = res_ct.scalars().first()
+    if not code_test or code_test.instructor_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    cnt_q = await db.execute(select(func.count(models.Problem.id)).where(models.Problem.test_id == test_id))
+    total_problems = int(cnt_q.scalar() or 0)
+
+    res = await db.execute(
+        select(models.TestResult).options(selectinload(models.TestResult.student)).where(models.TestResult.test_id == test_id)
+    )
     results = res.scalars().all()
-    return [{"student_name": r.student.full_name, "email": r.student.email, "score": r.score, "problems_solved": r.problems_solved, "time_taken": r.time_taken, "submitted_at": r.submitted_at.strftime("%Y-%m-%d %H:%M")} for r in results]
+    out = []
+    for r in results:
+        solved = int(r.problems_solved or 0)
+        pct = round((solved / total_problems) * 100) if total_problems > 0 else 0
+        out.append(
+            {
+                "student_name": r.student.full_name,
+                "email": r.student.email,
+                "score": r.score,
+                "problems_solved": solved,
+                "total_problems": total_problems,
+                "completion_label": f"{solved}/{total_problems}",
+                "completion_percent": pct,
+                "time_taken": r.time_taken,
+                "submitted_at": r.submitted_at.strftime("%Y-%m-%d %H:%M") if r.submitted_at else "",
+            }
+        )
+    return out
 
 @app.delete("/api/v1/code-tests/{test_id}")
 async def delete_code_test(test_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
