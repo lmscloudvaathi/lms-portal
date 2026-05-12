@@ -165,7 +165,7 @@ const CourseCard = ({ course, type, navigate, handleFreeEnroll, openEnrollModal,
 };
 
 // --- 🔄 POLL RESULT HELPER (Added Globally) ---
-// --- POLLING HELPER REMOVED (Lambda is sync) ---
+// --- POLLING HELPER REMOVED (execute is synchronous) ---
 
 // --- 🔵 MAIN COMPONENT ---
 
@@ -559,7 +559,7 @@ const StudentDashboard = () => {
                 setExecutionStatus("error");
                 setConsoleOutput(
                     "❌ Compiler returned no usable test summary (0/0).\n\n" +
-                    "Ensure your Lambda returns JSON with `results` and `stats` for each run."
+                    "Ensure the server returns JSON with `results` and `stats` for each run."
                 );
                 return;
             }
@@ -646,8 +646,8 @@ const StudentDashboard = () => {
                 setExecutionStatus("error");
                 setConsoleOutput(
                     "❌ The compiler did not report any test results (0/0).\n\n" +
-                    "Your Lambda must return JSON like: { \"stats\": { \"passed\": n, \"total\": n, \"runtime_ms\": n }, \"results\": [ { \"input\", \"expected\", \"actual\", \"status\" } ] }.\n" +
-                    "A plain string response (e.g. \"Hello from Lambda!\") will not work for Code Arena."
+                    "The backend must return JSON like: { \"stats\": { \"passed\": n, \"total\": n, \"runtime_ms\": n }, \"results\": [ { \"input\", \"expected\", \"actual\", \"status\" } ] }.\n" +
+                    "A plain string response will not work for Code Arena."
                 );
                 triggerToast("Invalid compiler response", "error");
                 return;

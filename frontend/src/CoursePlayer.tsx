@@ -46,7 +46,7 @@ const ToastNotification = ({ toast, setToast }: any) => {
 // --- 🔄 IMPROVED POLLING HELPER (UPDATED) ---
 // We changed this to handle the "Batch JSON" response structure.
 // --- 🔄 UPDATED POLLING HELPER ---
-// --- POLLING HELPER REMOVED (Lambda is sync) ---
+// --- POLLING HELPER REMOVED (execute is synchronous) ---
 
 // --- 💻 COMPONENT: CODE COMPILER (For Standard Lessons) ---
 // Updated to send 'test_cases' array instead of 'stdin'

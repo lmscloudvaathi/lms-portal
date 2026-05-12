@@ -110,7 +110,7 @@ export const CodeTestPreview = ({ lesson }: { lesson: any }) => {
     }
   };
 
-  // 🔵 HANDLE SUBMIT (Run All Tests via AWS)
+  // Submit: run all tests on the server
   const handleSubmit = async () => {
     if (!canSubmit) {
       triggerToast("Please run code successfully first.", "error");
@@ -123,7 +123,7 @@ export const CodeTestPreview = ({ lesson }: { lesson: any }) => {
     }
 
     setIsRunning(true);
-    setConsoleOutput("🚀 Running all test cases on AWS Lambda...");
+    setConsoleOutput("🚀 Running all test cases on the server...");
 
     try {
       // Send ALL cases in ONE request
@@ -140,7 +140,7 @@ export const CodeTestPreview = ({ lesson }: { lesson: any }) => {
         return;
       }
 
-      // Map AWS results back to UI format
+      // Map API results back to UI format
       const formattedResults = (report.results || []).map((r: any) => ({
         passed: r.status === "Passed",
         actual: r.actual,

@@ -1,8 +1,8 @@
 """
-Free code execution without AWS Lambda.
+Code execution for /api/v1/execute.
 
 - Python (71): runs on the same machine as FastAPI via subprocess + a small driver
-  (same idea as services/lambda_compiler/lambda_function.py).
+  that calls the learner's `solve()` against each test case.
 - C++ (54) / Java (62): try local g++/javac when present; otherwise use Judge0 CE
   (default https://ce.judge0.com — no API key for the public instance; fair-use / rate limits apply).
 

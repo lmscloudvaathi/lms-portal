@@ -56,9 +56,6 @@ from sqlalchemy import text
 from token_manager import TokenManager
 import code_runner
 
-
-AWS_LAMBDA_URL = os.getenv("AWS_LAMBDA_URL")
-        
 # Load environment variables
 load_dotenv()
 
@@ -912,22 +909,7 @@ async def _resolve_execute_test_cases(
     return cases
 
 
-def _execution_uses_aws_lambda() -> bool:
-    """
-    auto: use Lambda only when AWS_LAMBDA_URL is set (backward compatible).
-    local: free in-process runner + Judge0 CE fallback for C++/Java when no g++/javac.
-    lambda: require AWS_LAMBDA_URL (explicit).
-    """
-    mode = (os.getenv("CODE_EXECUTION_BACKEND") or "auto").lower().strip()
-    url = (os.getenv("AWS_LAMBDA_URL") or "").strip()
-    if mode == "lambda":
-        return bool(url)
-    if mode == "local":
-        return False
-    return bool(url)
-
-
-# Code execution: AWS Lambda (optional) or free local runner + Judge0 CE
+# Code execution: local Python subprocess + host compilers or Judge0 CE (see code_runner.py)
 @app.post("/api/v1/execute")
 async def execute_code(
     payload: CodePayload,
@@ -940,90 +922,26 @@ async def execute_code(
     if tc_count == 0:
         return {"error": "No test cases to run for this request.", "stats": {"passed": 0, "total": 0}, "results": []}
 
-    data: Dict[str, Any]
+    try:
+        data = await asyncio.to_thread(
+            code_runner.run_execution_local,
+            payload.source_code,
+            payload.language_id,
+            test_cases,
+            "",
+        )
+    except Exception as e:
+        print(f"Code runner error: {e}")
+        return {"error": "Compiler Service Unavailable", "stats": {"passed": 0, "total": tc_count}, "results": []}
 
-    if _execution_uses_aws_lambda():
-        aws_url = (os.getenv("AWS_LAMBDA_URL") or AWS_LAMBDA_URL or "").strip()
-        if not aws_url:
-            raise HTTPException(
-                status_code=500,
-                detail="CODE_EXECUTION_BACKEND=lambda but AWS_LAMBDA_URL is not set",
-            )
-        try:
-            response = requests.post(
-                aws_url,
-                json={
-                    "source_code": payload.source_code,
-                    "language_id": payload.language_id,
-                    "test_cases": test_cases,
-                    "stdin": "",
-                },
-                timeout=15,
-            )
-            try:
-                data = response.json()
-            except json.JSONDecodeError:
-                return {
-                    "error": "Compiler returned invalid JSON.",
-                    "stats": {"passed": 0, "total": tc_count},
-                    "results": [],
-                }
+    if not isinstance(data, dict):
+        return {
+            "error": "Compiler returned an unexpected response type.",
+            "stats": {"passed": 0, "total": tc_count},
+            "results": [],
+        }
 
-            if isinstance(data, dict) and "body" in data:
-                body = data.get("body")
-                if isinstance(body, str):
-                    try:
-                        data = json.loads(body)
-                    except json.JSONDecodeError:
-                        return {
-                            "error": "Compiler `body` field is not valid JSON.",
-                            "stats": {"passed": 0, "total": tc_count},
-                            "results": [],
-                        }
-                else:
-                    data = body
-
-            if isinstance(data, str):
-                return {
-                    "error": "Compiler service is not returning the code-runner JSON format (got plain text or a JSON string). The Lambda must return an object with `results` and `stats`.",
-                    "detail": data[:400],
-                    "stats": {"passed": 0, "total": tc_count},
-                    "results": [],
-                }
-
-            if not isinstance(data, dict):
-                return {
-                    "error": "Compiler returned an unexpected response type.",
-                    "stats": {"passed": 0, "total": tc_count},
-                    "results": [],
-                }
-
-        except requests.exceptions.Timeout:
-            return {"error": "Execution Timed Out (Server Limit)", "stats": {"passed": 0, "total": tc_count}, "results": []}
-        except Exception as e:
-            print(f"AWS Error: {e}")
-            return {"error": "Compiler Service Unavailable", "stats": {"passed": 0, "total": tc_count}, "results": []}
-    else:
-        try:
-            data = await asyncio.to_thread(
-                code_runner.run_execution_local,
-                payload.source_code,
-                payload.language_id,
-                test_cases,
-                "",
-            )
-        except Exception as e:
-            print(f"Local code runner error: {e}")
-            return {"error": "Compiler Service Unavailable", "stats": {"passed": 0, "total": tc_count}, "results": []}
-
-        if not isinstance(data, dict):
-            return {
-                "error": "Compiler returned an unexpected response type.",
-                "stats": {"passed": 0, "total": tc_count},
-                "results": [],
-            }
-
-    # --- 🛡️ BACKEND VERIFICATION LAYER (Lambda or local / Judge0) ---
+    # --- 🛡️ BACKEND VERIFICATION LAYER ---
     results_list = data.get("results")
     if not isinstance(results_list, list):
         results_list = []
@@ -1031,7 +949,7 @@ async def execute_code(
     if len(results_list) == 0:
         return {
             "error": data.get("error")
-            or "Compiler did not return a `results` array. Update the Lambda to return one entry per test case with `input`, `expected`, `actual`, and optional `status`.",
+            or "Compiler did not return a `results` array (expected one entry per test case with `input`, `expected`, `actual`, and optional `status`).",
             "stats": data.get("stats") or {"passed": 0, "total": tc_count},
             "results": [],
         }

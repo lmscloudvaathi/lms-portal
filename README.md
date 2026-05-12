@@ -49,12 +49,10 @@ GEMINI_API_KEY="your_gemini_api_key"
 EMAIL_SENDER="your_email@gmail.com"
 BREVO_API_KEY="your_brevo_api_key"
 
-# JUDGE0 COMPILER API
-JUDGE0_API_KEY="your_judge0_api_key"
-JUDGE0_API_HOST="judge0-ce.p.rapidapi.com"
-
-# AWS LAMBDA URL
-AWS_LAMBDA_URL="your_aws_lambda_url"
+# Code execution (optional — Python on-server; C++/Java via Judge0 if no local compilers)
+# JUDGE0_API_URL=https://ce.judge0.com
+# JUDGE0_RAPIDAPI_HOST=judge0-ce.p.rapidapi.com
+# JUDGE0_RAPIDAPI_KEY=
 ```
 
 ### Frontend (`frontend/.env`)
