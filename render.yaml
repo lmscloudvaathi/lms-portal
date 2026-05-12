@@ -32,5 +32,11 @@ services:
         sync: false
       - key: BREVO_API_KEY
         sync: false
+      # Optional: set only if you use AWS Lambda for code execution
       - key: AWS_LAMBDA_URL
+        sync: false
+      # local | lambda | auto (default auto: Lambda if AWS_LAMBDA_URL is set)
+      - key: CODE_EXECUTION_BACKEND
+        sync: false
+      - key: JUDGE0_API_URL
         sync: false

@@ -54,6 +54,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from sqlalchemy import text
 from token_manager import TokenManager
+import code_runner
 
 
 AWS_LAMBDA_URL = os.getenv("AWS_LAMBDA_URL")
@@ -911,64 +912,109 @@ async def _resolve_execute_test_cases(
     return cases
 
 
-# Judge0 Execution (Async Request) -> Replaced with AWS Lambda Proxy
+def _execution_uses_aws_lambda() -> bool:
+    """
+    auto: use Lambda only when AWS_LAMBDA_URL is set (backward compatible).
+    local: free in-process runner + Judge0 CE fallback for C++/Java when no g++/javac.
+    lambda: require AWS_LAMBDA_URL (explicit).
+    """
+    mode = (os.getenv("CODE_EXECUTION_BACKEND") or "auto").lower().strip()
+    url = (os.getenv("AWS_LAMBDA_URL") or "").strip()
+    if mode == "lambda":
+        return bool(url)
+    if mode == "local":
+        return False
+    return bool(url)
+
+
+# Code execution: AWS Lambda (optional) or free local runner + Judge0 CE
 @app.post("/api/v1/execute")
 async def execute_code(
     payload: CodePayload,
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    if not AWS_LAMBDA_URL:
-        raise HTTPException(status_code=500, detail="Compiler Configuration Error (Missing AWS URL)")
-
     test_cases = await _resolve_execute_test_cases(payload, db, current_user)
     tc_count = len(test_cases)
 
     if tc_count == 0:
         return {"error": "No test cases to run for this request.", "stats": {"passed": 0, "total": 0}, "results": []}
 
-    try:
-        # 1. Forward to AWS Lambda (The Runner)
-        # We assume Lambda returns a list of results with "actual" output
-        response = requests.post(AWS_LAMBDA_URL, json={
-            "source_code": payload.source_code,
-            "language_id": payload.language_id,
-            "test_cases": test_cases,
-            "stdin": "" 
-        }, timeout=15)
-        
+    data: Dict[str, Any]
+
+    if _execution_uses_aws_lambda():
+        aws_url = (os.getenv("AWS_LAMBDA_URL") or AWS_LAMBDA_URL or "").strip()
+        if not aws_url:
+            raise HTTPException(
+                status_code=500,
+                detail="CODE_EXECUTION_BACKEND=lambda but AWS_LAMBDA_URL is not set",
+            )
         try:
-            data = response.json()
-        except json.JSONDecodeError:
-            return {
-                "error": "Compiler returned invalid JSON.",
-                "stats": {"passed": 0, "total": tc_count},
-                "results": [],
-            }
+            response = requests.post(
+                aws_url,
+                json={
+                    "source_code": payload.source_code,
+                    "language_id": payload.language_id,
+                    "test_cases": test_cases,
+                    "stdin": "",
+                },
+                timeout=15,
+            )
+            try:
+                data = response.json()
+            except json.JSONDecodeError:
+                return {
+                    "error": "Compiler returned invalid JSON.",
+                    "stats": {"passed": 0, "total": tc_count},
+                    "results": [],
+                }
 
-        # Handle AWS API Gateway wrapping
-        if isinstance(data, dict) and "body" in data:
-            body = data.get("body")
-            if isinstance(body, str):
-                try:
-                    data = json.loads(body)
-                except json.JSONDecodeError:
-                    return {
-                        "error": "Compiler `body` field is not valid JSON.",
-                        "stats": {"passed": 0, "total": tc_count},
-                        "results": [],
-                    }
-            else:
-                data = body
+            if isinstance(data, dict) and "body" in data:
+                body = data.get("body")
+                if isinstance(body, str):
+                    try:
+                        data = json.loads(body)
+                    except json.JSONDecodeError:
+                        return {
+                            "error": "Compiler `body` field is not valid JSON.",
+                            "stats": {"passed": 0, "total": tc_count},
+                            "results": [],
+                        }
+                else:
+                    data = body
 
-        # Lambda Function URL often returns a bare JSON string (e.g. "Hello from Lambda!")
-        if isinstance(data, str):
-            return {
-                "error": "Compiler service is not returning the code-runner JSON format (got plain text or a JSON string). The Lambda must return an object with `results` and `stats`.",
-                "detail": data[:400],
-                "stats": {"passed": 0, "total": tc_count},
-                "results": [],
-            }
+            if isinstance(data, str):
+                return {
+                    "error": "Compiler service is not returning the code-runner JSON format (got plain text or a JSON string). The Lambda must return an object with `results` and `stats`.",
+                    "detail": data[:400],
+                    "stats": {"passed": 0, "total": tc_count},
+                    "results": [],
+                }
+
+            if not isinstance(data, dict):
+                return {
+                    "error": "Compiler returned an unexpected response type.",
+                    "stats": {"passed": 0, "total": tc_count},
+                    "results": [],
+                }
+
+        except requests.exceptions.Timeout:
+            return {"error": "Execution Timed Out (Server Limit)", "stats": {"passed": 0, "total": tc_count}, "results": []}
+        except Exception as e:
+            print(f"AWS Error: {e}")
+            return {"error": "Compiler Service Unavailable", "stats": {"passed": 0, "total": tc_count}, "results": []}
+    else:
+        try:
+            data = await asyncio.to_thread(
+                code_runner.run_execution_local,
+                payload.source_code,
+                payload.language_id,
+                test_cases,
+                "",
+            )
+        except Exception as e:
+            print(f"Local code runner error: {e}")
+            return {"error": "Compiler Service Unavailable", "stats": {"passed": 0, "total": tc_count}, "results": []}
 
         if not isinstance(data, dict):
             return {
@@ -977,66 +1023,57 @@ async def execute_code(
                 "results": [],
             }
 
-        # --- 🛡️ THE FIX: BACKEND VERIFICATION LAYER ---
-        # The Lambda runs the code, but we (the Backend) will GRADE it.
-        # This fixes the issue where Java/C "passes" without actually matching the output.
+    # --- 🛡️ BACKEND VERIFICATION LAYER (Lambda or local / Judge0) ---
+    results_list = data.get("results")
+    if not isinstance(results_list, list):
+        results_list = []
 
-        results_list = data.get("results")
-        if not isinstance(results_list, list):
-            results_list = []
+    if len(results_list) == 0:
+        return {
+            "error": data.get("error")
+            or "Compiler did not return a `results` array. Update the Lambda to return one entry per test case with `input`, `expected`, `actual`, and optional `status`.",
+            "stats": data.get("stats") or {"passed": 0, "total": tc_count},
+            "results": [],
+        }
 
-        if len(results_list) == 0:
-            return {
-                "error": data.get("error")
-                or "Compiler did not return a `results` array. Update the Lambda to return one entry per test case with `input`, `expected`, `actual`, and optional `status`.",
-                "stats": {"passed": 0, "total": tc_count},
-                "results": [],
-            }
+    passed_count = 0
 
-        passed_count = 0
+    for i, res in enumerate(results_list):
+        if not isinstance(res, dict):
+            continue
+        rid = res.get("id")
+        idx = rid if isinstance(rid, int) and 0 <= rid < len(test_cases) else i
+        if idx < 0 or idx >= len(test_cases):
+            idx = i if i < len(test_cases) else len(test_cases) - 1
+        tc = test_cases[idx] if isinstance(test_cases[idx], dict) else {}
 
-        for i, res in enumerate(results_list):
-            if not isinstance(res, dict):
-                continue
-            rid = res.get("id")
-            idx = rid if isinstance(rid, int) and 0 <= rid < len(test_cases) else i
-            if idx < 0 or idx >= len(test_cases):
-                idx = i if i < len(test_cases) else len(test_cases) - 1
-            tc = test_cases[idx] if isinstance(test_cases[idx], dict) else {}
+        canon_expected = tc.get("expected", tc.get("output", ""))
+        canon_input = tc.get("input", tc.get("stdin", ""))
 
-            # DB / Code Arena store expected value as "output"; Lambda often leaves "expected" blank.
-            canon_expected = tc.get("expected", tc.get("output", ""))
-            canon_input = tc.get("input", tc.get("stdin", ""))
+        raw_actual = str(res.get("actual", ""))
+        raw_expected = str(res.get("expected", res.get("output", "")))
+        if not raw_expected.strip() and canon_expected is not None and str(canon_expected).strip():
+            raw_expected = str(canon_expected)
+        if not str(res.get("input", res.get("stdin", ""))).strip() and str(canon_input).strip():
+            res["input"] = canon_input
 
-            raw_actual = str(res.get("actual", ""))
-            raw_expected = str(res.get("expected", res.get("output", "")))
-            if not raw_expected.strip() and canon_expected is not None and str(canon_expected).strip():
-                raw_expected = str(canon_expected)
-            if not str(res.get("input", res.get("stdin", ""))).strip() and str(canon_input).strip():
-                res["input"] = canon_input
+        ok, disp_a, disp_e = _judge_outputs_equal(raw_actual, raw_expected)
+        res["actual"] = disp_a
+        res["expected"] = disp_e
+        if ok:
+            res["status"] = "Passed"
+            passed_count += 1
+        else:
+            res["status"] = "Failed"
 
-            # 2–3. RE-GRADE with same rules as local Pyodide (multi-line stdout, whitespace, numbers)
-            ok, disp_a, disp_e = _judge_outputs_equal(raw_actual, raw_expected)
-            res["actual"] = disp_a
-            res["expected"] = disp_e
-            if ok:
-                res["status"] = "Passed"
-                passed_count += 1
-            else:
-                res["status"] = "Failed"
+    data["results"] = results_list
+    data.setdefault("stats", {})
+    data["stats"]["passed"] = passed_count
+    data["stats"]["total"] = tc_count
 
-        data["results"] = results_list
-        data.setdefault("stats", {})
-        data["stats"]["passed"] = passed_count
-        data["stats"]["total"] = tc_count
+    return data
 
-        return data
 
-    except requests.exceptions.Timeout:
-        return {"error": "Execution Timed Out (Server Limit)", "stats": {"passed": 0, "total": tc_count}, "results": []}
-    except Exception as e:
-        print(f"AWS Error: {e}")
-        return {"error": "Compiler Service Unavailable", "stats": {"passed": 0, "total": tc_count}, "results": []}
 @app.get("/api/v1/courses")
 async def get_courses(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if current_user.role == "instructor":
