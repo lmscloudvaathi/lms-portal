@@ -1,36 +1,38 @@
-import google.generativeai as genai
+"""List Gemini models that support generateContent (uses GEMINI_API_KEY from env)."""
 import os
+import sys
 
-# ✅ YOUR API KEY
-api_key = "AIzaSyBgfLU5nf8l3KbhtsPmcg3f1s7k4irU3UU" # <--- MAKE SURE THIS IS CORRECT
+import google.generativeai as genai
 
-print(f"🔍 Checking API Key: {api_key[:10]}...")
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    print("Set GEMINI_API_KEY in the environment (same as the backend).")
+    sys.exit(1)
+
+print(f"Checking API key prefix: {api_key[:10]}...")
 
 try:
     genai.configure(api_key=api_key)
-    
-    print("\n📡 Connecting to Google AI...")
+    print("Connecting to Google AI...")
     models = list(genai.list_models())
-    
-    print(f"\n✅ FOUND {len(models)} MODELS:")
+    print(f"Found {len(models)} models:")
     print("-" * 40)
-    
+
     supported_models = []
     for m in models:
-        # Check if model supports content generation (text)
-        if 'generateContent' in m.supported_generation_methods:
-            print(f"🟢 AVAILABLE: {m.name}")
+        if "generateContent" in m.supported_generation_methods:
+            print(f"AVAILABLE: {m.name}")
             supported_models.append(m.name)
         else:
-            print(f"⚪ (Other):   {m.name}")
-            
+            print(f"(other):   {m.name}")
+
     print("-" * 40)
-    
+
     if not supported_models:
-        print("❌ NO models found that support text generation!")
+        print("No models found that support text generation.")
     else:
-        print(f"\n👉 SUGGESTION: Update your main.py to use one of the '🟢 AVAILABLE' names above.")
-        
+        print("Use one of the AVAILABLE model names in main.py if needed.")
+
 except Exception as e:
-    print(f"\n🔥 CRITICAL ERROR: {str(e)}")
-    print("Double check your API KEY and Internet Connection.")
+    print(f"Error: {e}")
+    sys.exit(1)

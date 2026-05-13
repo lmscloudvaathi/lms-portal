@@ -7,7 +7,7 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String(255), unique=True, index=True)
-    phone_number = Column(String(32), nullable=True) # <--- ADD THIS LINE
+    phone_number = Column(String(32), nullable=True)
     full_name = Column(String(255))
     hashed_password = Column(String(255))
     role = Column(String(32)) 
@@ -16,12 +16,13 @@ class User(Base):
     last_login = Column(DateTime, nullable=True)
     # Google OAuth subject (stable per Google account); null for email/password-only users
     google_sub = Column(String(255), nullable=True, unique=True, index=True)
-    # ... rest of the relationships remain exactly the same ...
     enrollments = relationship("Enrollment", back_populates="student")
     submissions = relationship("Submission", back_populates="student")
     test_results = relationship("TestResult", back_populates="student")
     
     live_sessions = relationship("LiveSession", back_populates="instructor")
+
+
 class Course(Base):
     __tablename__ = "courses"
     id = Column(Integer, primary_key=True, index=True)
@@ -62,10 +63,9 @@ class ContentItem(Base):
     test_config = Column(Text, nullable=True) 
     # Optional JSON string list of resource URLs for video lessons.
     resource_links = Column(Text, nullable=True)
-    
-    # ✅ NEW FIELDS FOR LIVE TEST SCHEDULING
-    start_time = Column(DateTime, nullable=True) # e.g., 2023-10-27 20:00:00
-    end_time = Column(DateTime, nullable=True)   # e.g., 2023-10-27 20:30:00
+
+    start_time = Column(DateTime, nullable=True)
+    end_time = Column(DateTime, nullable=True)
 
     module = relationship("Module", back_populates="items")
 
@@ -94,7 +94,7 @@ class Submission(Base):
     student = relationship("User", back_populates="submissions")
     assignment = relationship("ContentItem")
 
-# --- CODE ARENA MODELS ---
+# Code arena
 class CodeTest(Base):
     __tablename__ = "code_tests"
     id = Column(Integer, primary_key=True, index=True)
@@ -131,7 +131,6 @@ class TestResult(Base):
     student = relationship("User", back_populates="test_results")
     test = relationship("CodeTest", back_populates="results")
 
-# ✅ NEW: LIVE SESSION MODEL
 class LiveSession(Base):
     __tablename__ = "live_sessions"
     id = Column(Integer, primary_key=True, index=True)
@@ -165,11 +164,9 @@ class ChallengeProgress(Base):
     solved_at = Column(DateTime, default=datetime.utcnow)
     user_code = Column(Text, nullable=True) # Save their last successful code
 
-    challenge = relationship("CourseChallenge", back_populates="progress")    
-    
-# ... existing code ...
+    challenge = relationship("CourseChallenge", back_populates="progress")
 
-# ✅ NEW: TRACKS GREEN TICKS FOR MODULES
+
 class LessonProgress(Base):
     __tablename__ = "lesson_progress"
     id = Column(Integer, primary_key=True, index=True)
@@ -177,15 +174,13 @@ class LessonProgress(Base):
     content_item_id = Column(Integer, ForeignKey("content_items.id"))
     is_completed = Column(Boolean, default=True)
     completed_at = Column(DateTime, default=datetime.utcnow)
-    
-    # ✅ NEW FIELDS FOR PROCTORING
-    violation_count = Column(Integer, default=0) # Tracks tab switches
-    is_terminated = Column(Boolean, default=False) # True if kicked out
+
+    violation_count = Column(Integer, default=0)
+    is_terminated = Column(Boolean, default=False)
     
     user = relationship("User")
     content_item = relationship("ContentItem")
 
-# ✅ NEW: STORES GENERATED CERTIFICATES
 class UserCertificate(Base):
     __tablename__ = "user_certificates"
     id = Column(Integer, primary_key=True, index=True)
@@ -207,5 +202,4 @@ class Notification(Base):
     is_read = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    # Optional: Relationship back to User if you want to access user.notifications
     user = relationship("User", backref="notifications")

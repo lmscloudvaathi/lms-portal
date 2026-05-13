@@ -8,15 +8,46 @@ import {
 import { motion } from "framer-motion";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
+function countPendingAssignmentReviews(assignmentsPayload: unknown): number {
+  if (!Array.isArray(assignmentsPayload)) return 0;
+  let n = 0;
+  for (const course of assignmentsPayload) {
+    const tasks = (course as { assignment_tasks?: unknown[] }).assignment_tasks;
+    if (!Array.isArray(tasks)) continue;
+    for (const task of tasks) {
+      const submitted = (task as { submitted?: { status?: string }[] }).submitted;
+      if (!Array.isArray(submitted)) continue;
+      for (const sub of submitted) {
+        if (String(sub?.status ?? "").toLowerCase() === "pending") n++;
+      }
+    }
+  }
+  return n;
+}
+
+function countAssignmentSubmissions(assignmentsPayload: unknown): number {
+  if (!Array.isArray(assignmentsPayload)) return 0;
+  let n = 0;
+  for (const course of assignmentsPayload) {
+    const tasks = (course as { assignment_tasks?: unknown[] }).assignment_tasks;
+    if (!Array.isArray(tasks)) continue;
+    for (const task of tasks) {
+      const submitted = (task as { submitted?: unknown[] }).submitted;
+      if (!Array.isArray(submitted)) continue;
+      n += submitted.length;
+    }
+  }
+  return n;
+}
+
 const Dashboard = () => {
-  // ✅ Initialize with 0 so it animates to the real number
   const [stats, setStats] = useState({
     revenue: 0,
     students: 0,
     courses: 0,
     newEnrollments: 0,
-    pendingReviews: 2,
-    messages: 8
+    pendingReviews: 0,
+    assignmentSubmissions: 0,
   });
 
   const [userRole, setUserRole] = useState("");
@@ -63,13 +94,26 @@ const Dashboard = () => {
         const courseCount = coursesRes.data.length;
         const revenue = studentCount * 599; // Assuming ₹599 per student
 
-        setStats(prev => ({
-          ...prev,
-          revenue: revenue,
+        let pendingReviews = 0;
+        let assignmentSubmissions = 0;
+        if (storedRole === "instructor") {
+          try {
+            const assignRes = await axios.get(`${API_BASE_URL}/instructor/assignments`, config);
+            pendingReviews = countPendingAssignmentReviews(assignRes.data);
+            assignmentSubmissions = countAssignmentSubmissions(assignRes.data);
+          } catch {
+            /* no assignments or request failed */
+          }
+        }
+
+        setStats({
+          revenue,
           students: studentCount,
           courses: courseCount,
-          newEnrollments: studentCount
-        }));
+          newEnrollments: studentCount,
+          pendingReviews,
+          assignmentSubmissions,
+        });
 
         // 4. CHECK FOR ACTIVE LIVE SESSION
         const liveRes = await axios.get(`${API_BASE_URL}/live/active`, config);
@@ -92,9 +136,22 @@ const Dashboard = () => {
   const AnimatedCounter = ({ value, prefix = "" }: { value: number, prefix?: string }) => {
     const [count, setCount] = useState(0);
     useEffect(() => {
-      let start = 0; const end = value; if (start === end) return;
+      let start = 0;
+      const end = value;
+      if (start === end) {
+        setCount(end);
+        return;
+      }
       const increment = end / 50;
-      const timer = setInterval(() => { start += increment; if (start >= end) { setCount(end); clearInterval(timer); } else setCount(Math.ceil(start)); }, 20);
+      const timer = setInterval(() => {
+        start += increment;
+        if (start >= end) {
+          setCount(end);
+          clearInterval(timer);
+        } else {
+          setCount(Math.ceil(start));
+        }
+      }, 20);
       return () => clearInterval(timer);
     }, [value]);
     return <span>{prefix}{count}</span>;
@@ -138,7 +195,7 @@ const Dashboard = () => {
         {[
           { title: "New Enrollments", val: stats.newEnrollments, icon: UserPlus },
           { title: "Pending Reviews", val: stats.pendingReviews, icon: FileText },
-          { title: "Unread Messages", val: stats.messages, icon: MessageSquare }
+          { title: "Assignment submissions", val: stats.assignmentSubmissions, icon: MessageSquare }
         ].map((item, i) => (
           <motion.div
             key={i}

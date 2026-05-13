@@ -5,14 +5,12 @@ import ssl
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from dotenv import load_dotenv
 
-# ✅ REMOVED: import redis.asyncio as redis (No longer needed)
-
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    raise ValueError("❌ DATABASE_URL is missing in .env file!")
+    raise ValueError("DATABASE_URL is missing in .env file!")
 
 # Normalize DB URL to an async driver so one env var works for both
 # PostgreSQL and TiDB/MySQL deployments.
@@ -51,17 +49,15 @@ if ASYNC_DATABASE_URL.startswith("mysql+aiomysql://"):
     ssl_ctx = ssl.create_default_context(cafile=ca_path) if ca_path else ssl.create_default_context()
     CONNECT_ARGS["ssl"] = ssl_ctx
 
-# 🟢 FIX: OPTIMIZED FOR FREE TIER
 engine = create_async_engine(
     ASYNC_DATABASE_URL,
     echo=False,
     connect_args=CONNECT_ARGS,
-    # ⚠️ CRITICAL CHANGE: Reduced to prevent "Too many clients" error
-    pool_size=5,            # Keep only 5 connections open (Safe for Free Tier)
-    max_overflow=10,        # Allow 10 max during traffic spikes
+    pool_size=5,
+    max_overflow=10,
     pool_timeout=30,
     pool_recycle=1800,
-    pool_pre_ping=True      # Check connection before using
+    pool_pre_ping=True,
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -80,5 +76,3 @@ async def get_db():
             yield session
         finally:
             await session.close()
-
-# ✅ REMOVED: Redis Client initialization

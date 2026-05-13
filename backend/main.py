@@ -1520,9 +1520,7 @@ async def get_course_player(course_id: int, db: AsyncSession = Depends(get_db), 
                         "resource_links": parse_resource_links(c.resource_links),
                         "duration": c.duration, 
                         "is_mandatory": c.is_mandatory, 
-                        "is_completed": c.id in completed_ids, 
-
-                        # ✅ INSERT THE NEW LINES EXACTLY HERE (After "is_completed")
+                        "is_completed": c.id in completed_ids,
                         "start_time": c.start_time,
                         "end_time": c.end_time,
                         "is_terminated": progress_map.get(c.id).is_terminated if c.id in progress_map else False,
@@ -1624,9 +1622,7 @@ async def get_my_courses(db: AsyncSession = Depends(get_db), current_user: model
                 "price": e.course.price,
                 "image_url": e.course.image_url,
                 "instructor_id": e.course.instructor_id,
-                
-                # ✅ ADDED THIS LINE to support Standard/Coding tabs
-                "course_type": e.course.course_type, 
+                "course_type": e.course.course_type,
 
                 # UI Status Fields
                 "enrollment_type": e.enrollment_type, # "paid" or "trial"
@@ -1947,7 +1943,7 @@ async def delete_student(user_id: int, db: AsyncSession = Depends(get_db), curre
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to delete student: {str(e)}")
 
-# --- 🆕 ADD THIS TO main.py ---
+
 @app.patch("/api/v1/admin/students/{user_id}/reset-password")
 async def reset_student_password(user_id: int, req: PasswordChange, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
     # 1. Find Student
