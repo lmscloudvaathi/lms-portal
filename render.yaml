@@ -1,5 +1,11 @@
-# Render Blueprint: New → Blueprint → connect repo; set env vars in the dashboard.
-# Do not put secrets in this file. Use sync: false and configure in Render UI.
+# Render Blueprint: Dashboard → New → Blueprint → connect repo; set values in the service Environment tab.
+# Do not put secrets in this file (sync: false = define in Render UI only).
+#
+# New / important for this stack:
+#   CORS_ORIGINS     Comma-separated browser origins (your Netlify URL, production domain, etc.)
+#   GOOGLE_CLIENT_ID Web OAuth client id (same as VITE_GOOGLE_CLIENT_ID on the frontend)
+#   GMAIL_USER       Learner email-OTP signup (Gmail address)
+#   GMAIL_APP_PASSWORD Gmail app password for SMTP
 
 services:
   - type: web
@@ -21,6 +27,14 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: DB_SSL_CA_PATH
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GMAIL_USER
+        sync: false
+      - key: GMAIL_APP_PASSWORD
         sync: false
       - key: RAZORPAY_KEY_ID
         sync: false
