@@ -14,6 +14,8 @@ class User(Base):
     is_active = Column(Boolean, default=True) # If False, user is "banned/deleted" but data exists
     created_at = Column(DateTime, default=datetime.utcnow) # Know exactly when they joined
     last_login = Column(DateTime, nullable=True)
+    # Google OAuth subject (stable per Google account); null for email/password-only users
+    google_sub = Column(String(255), nullable=True, unique=True, index=True)
     # ... rest of the relationships remain exactly the same ...
     enrollments = relationship("Enrollment", back_populates="student")
     submissions = relationship("Submission", back_populates="student")

@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { GoogleOAuthProvider } from "@react-oauth/google";
 import axios from "axios";
 import { FileText,  PlusCircle, BookOpen, Trash2, CheckCircle,  X, AlertTriangle } from "lucide-react"; // ✅ Added Icons
-import API_BASE_URL from './config';
+import API_BASE_URL, { GOOGLE_CLIENT_ID } from './config';
 import AdminLogin from "./AdminLogin";
 import Login from "./Login";
 import LandingPage from "./LandingPage"; 
@@ -147,7 +148,7 @@ const CourseList = () => {
 };
 
 function App() {
-  return (
+  const routes = (
     <Router>
       <Routes>
         <Route path="/" element={<LandingPage />} />
@@ -175,6 +176,11 @@ function App() {
       </Routes>
     </Router>
   );
+
+  if (GOOGLE_CLIENT_ID) {
+    return <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>{routes}</GoogleOAuthProvider>;
+  }
+  return routes;
 }
 
 const isStaffRole = (role: string) => role === "instructor" || role === "admin";

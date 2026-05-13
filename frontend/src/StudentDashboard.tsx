@@ -354,10 +354,17 @@ const StudentDashboard = () => {
     }, []);
 
     useEffect(() => {
-        if (enrolledCourses.length > 0) {
-            enrolledCourses.forEach(course => {
+        if (enrolledCourses.length === 0) return;
+        const lockedProgress: { [key: number]: { percent: number; completed: number; total: number } } = {};
+        for (const course of enrolledCourses) {
+            if (course.is_trial_expired) {
+                lockedProgress[course.id] = { percent: 0, completed: 0, total: 0 };
+            } else {
                 fetchCourseProgress(course.id);
-            });
+            }
+        }
+        if (Object.keys(lockedProgress).length > 0) {
+            setProgressMap(prev => ({ ...prev, ...lockedProgress }));
         }
     }, [enrolledCourses]);
 
@@ -382,7 +389,16 @@ const StudentDashboard = () => {
                 ...prev,
                 [courseId]: { percent, completed, total: totalLessons }
             }));
-        } catch (err) { console.error("Failed to fetch progress", err); }
+        } catch (err) {
+            if (axios.isAxiosError(err) && err.response?.status === 402) {
+                setProgressMap(prev => ({
+                    ...prev,
+                    [courseId]: { percent: 0, completed: 0, total: 0 }
+                }));
+                return;
+            }
+            console.error("Failed to fetch progress", err);
+        }
     };
 
     // 🛡️ MILITARY GRADE PROCTORING LOGIC

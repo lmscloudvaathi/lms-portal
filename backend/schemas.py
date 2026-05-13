@@ -1,5 +1,5 @@
-from pydantic import BaseModel, EmailStr
-from typing import List, Optional
+from pydantic import BaseModel, EmailStr, Field
+from typing import List, Optional, Literal
 from datetime import datetime
 
 # --- USER SCHEMAS ---
@@ -11,6 +11,30 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str
+
+
+class SignupSendOtpRequest(BaseModel):
+    """Learner self-signup: send email OTP before account is created."""
+    email: EmailStr
+    password: str
+    name: str
+    phone_number: Optional[str] = None
+
+
+class SignupVerifyOtpRequest(BaseModel):
+    email: EmailStr
+    otp: str
+
+
+class SignupResendOtpRequest(BaseModel):
+    email: EmailStr
+
+
+class GoogleStudentAuthRequest(BaseModel):
+    """Google Identity Services credential (JWT). Use mode=login on Sign in; mode=signup on Create account."""
+    credential: str = Field(..., min_length=10, description="Google ID token (JWT)")
+    mode: Literal["login", "signup"] = "signup"
+
 
 class User(UserBase):
     id: int

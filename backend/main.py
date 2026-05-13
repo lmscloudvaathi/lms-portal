@@ -5,7 +5,6 @@ from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload 
 from sqlalchemy import delete, func
 from pydantic import BaseModel
-import bcrypt 
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any, Tuple
@@ -17,6 +16,7 @@ import requests
 import io
 import json
 import os
+from pathlib import Path
 import smtplib
 import random
 import string
@@ -30,8 +30,11 @@ import random
 import ssl
 import sys
 import backup_manager
+import email_otp
+from password_utils import verify_password, get_password_hash
+from signup_routes import router as signup_auth_router
+from student_google_auth import router as google_student_router
 from dotenv import load_dotenv
-from pydantic import BaseModel
 # --- 📄 PDF GENERATION IMPORTS ---
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import landscape, A4
@@ -56,8 +59,9 @@ from sqlalchemy import text
 from token_manager import TokenManager
 import code_runner
 
-# Load environment variables
-load_dotenv()
+# Load .env from this file's directory so GOOGLE_CLIENT_ID, DATABASE_URL, etc. work
+# even when uvicorn's cwd is not `backend/`.
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 # 1. Initialize Database Tables (Async approach is slightly different, but for now we keep sync creation for simplicity or use Alembic in prod)
 # For this setup, we will rely on the sync engine for table creation if needed, or assume tables exist.
@@ -85,6 +89,7 @@ async def init_models():
             
             # 🆕 FIX FOR YOUR ERROR: Add last_login column
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMP;"))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(255);"))
             await conn.execute(text("ALTER TABLE content_items ADD COLUMN IF NOT EXISTS resource_links TEXT;"))
             
             print("Database migrations applied successfully.")
@@ -111,11 +116,20 @@ async def on_shutdown():
     token_manager.stop()
 
 # 2. CONFIG: CORS (explicit origins when using credentials; browsers reject credentials + "*")
+# Note: os.getenv("CORS_ORIGINS", default) does NOT use default if the variable exists but is empty — treat blank as unset.
+_DEFAULT_CORS_ORIGINS = (
+    "https://lms.cloudvaathi.in,https://cloudvaathi-lms-20260508161650.netlify.app,"
+    "http://localhost:5173,http://127.0.0.1:5173,"
+    "http://localhost:5174,http://127.0.0.1:5174,"
+    "http://localhost:5175,http://127.0.0.1:5175,"
+    "http://localhost:5176,http://127.0.0.1:5176"
+)
+
+
 def _cors_settings() -> tuple[list[str], bool]:
-    raw = os.getenv(
-        "CORS_ORIGINS",
-        "https://lms.cloudvaathi.in,https://cloudvaathi-lms-20260508161650.netlify.app,http://localhost:5173,http://127.0.0.1:5173",
-    ).strip()
+    raw = (os.getenv("CORS_ORIGINS") or "").strip()
+    if not raw:
+        raw = _DEFAULT_CORS_ORIGINS
     if raw == "*":
         return ["*"], False
     parts = [p.strip() for p in raw.split(",") if p.strip()]
@@ -132,6 +146,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(signup_auth_router, prefix="/api/v1")
+app.include_router(google_student_router, prefix="/api/v1")
 
 # --- 🔐 SECURITY & AUTH CONFIG ---
 SECRET_KEY = os.getenv("SECRET_KEY", "fallback_secret_change_me_in_prod")
@@ -324,13 +341,6 @@ def parse_resource_links(raw_links: Optional[str]) -> List[Dict[str, str]]:
     return []
         
 # --- 🔑 AUTH LOGIC ---
-def verify_password(plain_password, hashed_password):
-    if isinstance(hashed_password, str): hashed_password = hashed_password.encode('utf-8')
-    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password)
-
-def get_password_hash(password):
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
 def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -561,34 +571,41 @@ async def create_user(user: UserCreate, db: AsyncSession = Depends(get_db)):
     db.add(new_user)
     await db.commit()
 
-    # 3. 📧 SEND OTP EMAIL
-    otp_code = str(random.randint(100000, 999999))
-    custom_subject = "Welcome to iQmath! Verify your account"
-    custom_body = f"Hello {user.name},\n\nWelcome to iQmath Pro!\n\nYour Account Status: ACTIVE\n\n(If you need an OTP for verification, here it is: {otp_code})\n\nHappy Learning!"
-
-    try:
-        # Run in thread so it doesn't block
-        await asyncio.to_thread(
-            send_credentials_email, 
-            to_email=user.email, 
-            name=user.name, 
-            password=None, 
-            subject=custom_subject, 
-            body=custom_body
-        )
-        email_status = "sent"
-        email_warning = None
-    except Exception as e:
-        print(f"Email failed: {e}")
-        # Do not fail signup if email provider is misconfigured.
-        email_status = "failed"
-        email_warning = str(e)
+    # 3. Optional Brevo welcome (instructors/admins/seeding — not student email OTP; learners verify via Gmail OTP before /users)
+    email_status = "skipped"
+    email_warning = None
+    if os.getenv("BREVO_API_KEY") and os.getenv("EMAIL_SENDER"):
+        try:
+            welcome_lines = (
+                f"Hello {user.name},\n\n"
+                f"Your {user.role} account is active.\n"
+                f"Sign-in email: {user.email}\n"
+            )
+            if user.role in ("instructor", "admin"):
+                welcome_lines += f"Password: {user.password}\n"
+            else:
+                welcome_lines += "Use the password you set when you registered.\n"
+            welcome_lines += "\nHappy Learning!"
+            await asyncio.to_thread(
+                send_credentials_email,
+                to_email=user.email,
+                name=user.name,
+                password=user.password if user.role in ("instructor", "admin") else None,
+                subject="Welcome to iQmath!",
+                body=welcome_lines,
+            )
+            email_status = "sent"
+        except Exception as e:
+            print(f"Welcome email failed: {e}")
+            email_status = "failed"
+            email_warning = str(e)
 
     return {
         "message": "User created successfully",
         "email_status": email_status,
-        "email_warning": email_warning
+        "email_warning": email_warning,
     }
+
 
 @app.post("/api/v1/login", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
@@ -597,11 +614,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
     
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Incorrect email or password")
-    
-    # ✅ CHECK 1: Password Verification
-    if not user or not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Incorrect email or password")
-    
+
     # ✅ CHECK 2: Is the User Active? (Soft Delete Check)
     if user.is_active is False:  # explicitly check for False
         raise HTTPException(status_code=403, detail="Account deactivated. Contact support.")
