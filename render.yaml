@@ -2,7 +2,8 @@
 # Do not put secrets in this file (sync: false = define in Render UI only).
 #
 # New / important for this stack:
-#   CORS_ORIGINS     Comma-separated browser origins (your Netlify URL, production domain, etc.)
+#   CORS_ORIGINS     Optional extra origins (comma-separated). Defaults always include
+#                    https://lms.cloudvaathi.in and all https://*.cloudvaathi.in subdomains.
 #   GOOGLE_CLIENT_ID Web OAuth client id (same as VITE_GOOGLE_CLIENT_ID on the frontend)
 #   GMAIL_USER       Learner email-OTP signup (Gmail address)
 #   GMAIL_APP_PASSWORD Gmail app password for SMTP

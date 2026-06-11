@@ -116,7 +116,7 @@ async def on_shutdown():
     token_manager.stop()
 
 # 2. CONFIG: CORS (explicit origins when using credentials; browsers reject credentials + "*")
-# Note: os.getenv("CORS_ORIGINS", default) does NOT use default if the variable exists but is empty — treat blank as unset.
+# CORS_ORIGINS in Render/Netlify is merged with defaults — env alone must not drop production domains.
 _DEFAULT_CORS_ORIGINS = (
     "https://lms.cloudvaathi.in,https://cloudvaathi-lms-20260508161650.netlify.app,"
     "http://localhost:5173,http://127.0.0.1:5173,"
@@ -124,24 +124,32 @@ _DEFAULT_CORS_ORIGINS = (
     "http://localhost:5175,http://127.0.0.1:5175,"
     "http://localhost:5176,http://127.0.0.1:5176"
 )
+# Any https subdomain of cloudvaathi.in (lms, www, preview deploys on custom subdomain, etc.)
+_CLOUDVAATHI_ORIGIN_REGEX = r"https://([a-zA-Z0-9-]+\.)*cloudvaathi\.in"
 
 
-def _cors_settings() -> tuple[list[str], bool]:
+def _normalize_origin(origin: str) -> str:
+    return origin.strip().rstrip("/")
+
+
+def _cors_settings() -> tuple[list[str], bool, str | None]:
     raw = (os.getenv("CORS_ORIGINS") or "").strip()
-    if not raw:
-        raw = _DEFAULT_CORS_ORIGINS
     if raw == "*":
-        return ["*"], False
-    parts = [p.strip() for p in raw.split(",") if p.strip()]
-    if not parts:
-        return ["*"], False
-    return parts, True
+        return ["*"], False, None
+
+    default_parts = [_normalize_origin(p) for p in _DEFAULT_CORS_ORIGINS.split(",") if p.strip()]
+    extra_parts = [_normalize_origin(p) for p in raw.split(",") if p.strip()] if raw else []
+    merged = list(dict.fromkeys(default_parts + extra_parts))
+    if not merged:
+        return ["*"], False, None
+    return merged, True, _CLOUDVAATHI_ORIGIN_REGEX
 
 
-_cors_allow, _cors_credentials = _cors_settings()
+_cors_allow, _cors_credentials, _cors_origin_regex = _cors_settings()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_allow,
+    allow_origin_regex=_cors_origin_regex,
     allow_credentials=_cors_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
