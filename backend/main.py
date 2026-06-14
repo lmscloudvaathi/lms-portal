@@ -395,6 +395,102 @@ def generate_random_password(length=8):
     characters = string.ascii_letters + string.digits + "!@#$"
     return ''.join(random.choice(characters) for i in range(length))
 
+
+def normalize_student_email(raw: str) -> str:
+    return str(raw or "").strip().lower()
+
+
+def _pick_bulk_column(columns: list[str], candidates: list[str]) -> str | None:
+    col_set = {c.lower().strip().replace(" ", "_") for c in columns}
+    for cand in candidates:
+        if cand in col_set:
+            return cand
+    return None
+
+
+def _parse_bulk_students_table(contents: bytes, filename: str) -> pd.DataFrame:
+    try:
+        if filename.lower().endswith(".csv"):
+            df = pd.read_csv(io.BytesIO(contents))
+        else:
+            df = pd.read_excel(io.BytesIO(contents))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid file format: {e}")
+    df.columns = [str(c).lower().strip().replace(" ", "_") for c in df.columns]
+    email_col = _pick_bulk_column(list(df.columns), ["email", "e_mail", "email_address", "student_email", "mail"])
+    if not email_col:
+        raise HTTPException(status_code=400, detail="Missing email column (expected: email, name).")
+    name_col = _pick_bulk_column(list(df.columns), ["name", "full_name", "student_name", "fullname"])
+    df["_bulk_email"] = df[email_col].astype(str).map(normalize_student_email)
+    df["_bulk_name"] = (
+        df[name_col].astype(str).str.strip()
+        if name_col
+        else pd.Series(["Student"] * len(df), index=df.index)
+    )
+    return df
+
+
+async def ensure_student_account(
+    db: AsyncSession,
+    email: str,
+    full_name: str,
+) -> tuple[models.User, bool, str | None]:
+    """Create a student account if missing. Returns (user, is_new, plaintext_password if new)."""
+    normalized = normalize_student_email(email)
+    if not normalized or normalized == "nan" or "@" not in normalized:
+        raise ValueError("Invalid email address.")
+
+    display_name = (full_name or "").strip() or normalized.split("@")[0]
+    display_name = display_name[:255]
+
+    result = await db.execute(select(models.User).where(models.User.email == normalized))
+    user = result.scalars().first()
+    if user:
+        if user.role != "student":
+            raise ValueError(f"{normalized} is registered as {user.role}, not a student.")
+        return user, False, None
+
+    password = generate_random_password()
+    user = models.User(
+        email=normalized,
+        full_name=display_name,
+        hashed_password=get_password_hash(password),
+        role="student",
+        phone_number=None,
+        google_sub=None,
+    )
+    db.add(user)
+    await db.flush()
+    return user, True, password
+
+
+async def enroll_student_in_courses(
+    db: AsyncSession,
+    student: models.User,
+    course_ids: list[int],
+    enrollment_type: str = "paid",
+) -> list[int]:
+    enrolled: list[int] = []
+    for cid in course_ids:
+        check = await db.execute(
+            select(models.Enrollment).where(
+                models.Enrollment.user_id == student.id,
+                models.Enrollment.course_id == cid,
+            )
+        )
+        if check.scalars().first():
+            continue
+        db.add(
+            models.Enrollment(
+                user_id=student.id,
+                course_id=cid,
+                enrollment_type=enrollment_type,
+                expiry_date=None,
+            )
+        )
+        enrolled.append(cid)
+    return enrolled
+
 # --- UTILITIES ---
 # backend/main.py
 
@@ -633,119 +729,100 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
     return {"access_token": token, "token_type": "bearer", "role": user.role}
 @app.post("/api/v1/admin/admit-student")
 async def admit_single_student(req: AdmitStudentRequest, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
-    # 1. Check if student exists
-    result = await db.execute(select(models.User).where(models.User.email == req.email))
-    student = result.scalars().first()
-    
-    final_password = req.password if req.password else generate_random_password()
-    is_new_user = False
-    email_status = "skipped"
+    try:
+        student, is_new, generated_password = await ensure_student_account(db, req.email, req.full_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    # 2. Create User if New
-    if not student:
-        is_new_user = True
-        
-        # ✅ CRITICAL: Send Email FIRST. If this fails, we want to know immediately.
-        # Running in a thread to keep it non-blocking but synchronous for the logic flow.
-        try:
-            await asyncio.to_thread(send_credentials_email, req.email, req.full_name, final_password)
-            email_status = "sent"
-        except Exception as e:
-            # If email fails, we STOP here. We do NOT create the user. 
-            # This forces you to fix the email issue instead of creating "broken" users.
-            print(f"Aborting user creation because email failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Email failed: {str(e)}")
-
-        # If email succeeded, NOW create the user
-        student = models.User(
-            email=req.email, 
-            full_name=req.full_name, 
-            hashed_password=get_password_hash(final_password), 
-            role="student",
-        )
-        db.add(student)
-        await db.commit()
-        await db.refresh(student)
-    
-    # 3. Enroll in Courses
-    enrolled = []
-    for cid in req.course_ids:
-        check = await db.execute(select(models.Enrollment).where(models.Enrollment.user_id == student.id, models.Enrollment.course_id == cid))
-        if not check.scalars().first():
-            db.add(models.Enrollment(user_id=student.id, course_id=cid))
-            enrolled.append(cid)
-    
+    enrolled = await enroll_student_in_courses(db, student, req.course_ids, enrollment_type="paid")
     await db.commit()
 
-    if is_new_user:
-        return {"message": f"User created & Email Sent! Enrolled in {len(enrolled)} courses.", "email_status": email_status}
-    else:
-        return {"message": f"Existing user enrolled.", "email_status": email_status}
-    
+    email_status = "skipped"
+    if is_new and generated_password:
+        password_to_send = req.password or generated_password
+        try:
+            await asyncio.to_thread(send_credentials_email, student.email, student.full_name, password_to_send)
+            email_status = "sent"
+        except Exception as e:
+            print(f"Admit welcome email failed for {student.email}: {e}")
+            email_status = "failed"
+
+    if is_new:
+        return {
+            "message": f"Account created and enrolled in {len(enrolled)} course(s). Student can sign in with Google or email/password.",
+            "email_status": email_status,
+            "created": True,
+            "enrolled_courses": len(enrolled),
+        }
+    return {
+        "message": f"Existing student enrolled in {len(enrolled)} course(s).",
+        "email_status": email_status,
+        "created": False,
+        "enrolled_courses": len(enrolled),
+    }
+
+
 @app.post("/api/v1/admin/bulk-admit")
 async def bulk_admit_students(file: UploadFile = File(...), course_id: int = Form(...), db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):
     contents = await file.read()
-    try:
-        df = pd.read_csv(io.BytesIO(contents)) if file.filename.endswith('.csv') else pd.read_excel(io.BytesIO(contents))
-    except: 
-        raise HTTPException(status_code=400, detail="Invalid file format. Please upload CSV or Excel.")
-    
-    # Normalize headers
-    df.columns = [c.lower().strip() for c in df.columns]
-    if "email" not in df.columns: 
-        raise HTTPException(status_code=400, detail="Missing 'email' column in file.")
-    
-    count = 0
-    email_tasks = [] # Store email tasks to run later
+    df = _parse_bulk_students_table(contents, file.filename or "upload.csv")
+
+    created_users = 0
+    enrolled_count = 0
+    skipped = 0
+    errors: list[dict[str, str]] = []
+    email_tasks: list[tuple[str, str, str]] = []
 
     for _, row in df.iterrows():
-        email = str(row["email"]).strip()
-        name = str(row.get("name", "Student"))
-        
-        if not email or email.lower() == "nan": continue
-        
-        # 1. Check if user exists
-        res = await db.execute(select(models.User).where(models.User.email == email))
-        student = res.scalars().first()
-        
-        if not student:
-            # Create new student
-            bulk_password = generate_random_password()
-            student = models.User(
-                email=email, 
-                full_name=name, 
-                hashed_password=get_password_hash(bulk_password), 
-                role="student"
+        email = str(row.get("_bulk_email", "")).strip()
+        name = str(row.get("_bulk_name", "Student")).strip()
+        if not email or email == "nan" or "@" not in email:
+            skipped += 1
+            continue
+
+        try:
+            student, is_new, password = await ensure_student_account(db, email, name)
+            if is_new:
+                created_users += 1
+                if password:
+                    email_tasks.append((student.email, student.full_name, password))
+
+            enrol_check = await db.execute(
+                select(models.Enrollment).where(
+                    models.Enrollment.user_id == student.id,
+                    models.Enrollment.course_id == course_id,
+                )
             )
-            db.add(student)
-            await db.commit()
-            await db.refresh(student)
-            
-            # ✅ OPTIMIZATION: Add email to a task list (don't block the loop)
-            email_tasks.append((email, name, bulk_password))
-        
-        # 2. Enroll in Course
-        enrol_check = await db.execute(select(models.Enrollment).where(
-            models.Enrollment.user_id == student.id, 
-            models.Enrollment.course_id == course_id
-        ))
-        
-        if not enrol_check.scalars().first():
-            db.add(models.Enrollment(user_id=student.id, course_id=course_id))
-            count += 1
-    
+            if enrol_check.scalars().first():
+                skipped += 1
+            else:
+                db.add(
+                    models.Enrollment(
+                        user_id=student.id,
+                        course_id=course_id,
+                        enrollment_type="paid",
+                        expiry_date=None,
+                    )
+                )
+                enrolled_count += 1
+        except Exception as e:
+            errors.append({"email": email, "error": str(e)})
+
     await db.commit()
 
-    # 3. 🚀 Send Emails in Background (Non-blocking)
-    # This prevents the request from timing out if you upload 100 students
     for email, name, password in email_tasks:
         try:
-            # Run each email in a thread
             await asyncio.to_thread(send_credentials_email, email, name, password)
         except Exception as e:
-            print(f"Failed to email {email}: {e}")
+            print(f"Bulk admit email failed for {email}: {e}")
 
-    return {"message": f"Successfully enrolled {count} students. Emails are being sent."}
+    return {
+        "message": f"Created {created_users} account(s), enrolled {enrolled_count} student(s).",
+        "created_users": created_users,
+        "enrolled": enrolled_count,
+        "skipped": skipped,
+        "errors": errors[:20],
+    }
 
 @app.post("/api/v1/ai/generate-challenge") # 👈 Changed from "/generate" to match Frontend
 async def generate_problem_content(req: AIGenerateRequest):
@@ -1862,6 +1939,54 @@ async def confirm_submission(req: ConfirmationRequest, db: AsyncSession = Depend
     # ✅ Removed certificate logic. Certificate is now only claimed via the "Claim Certificate" button.
     return {"message": "Submitted"}
 # In main.py
+
+@app.get("/api/v1/instructor/dashboard-stats")
+async def instructor_dashboard_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    """Revenue from paid enrollments only (not per registered user)."""
+    course_scope = []
+    if current_user.role == "instructor":
+        course_scope.append(models.Course.instructor_id == current_user.id)
+
+    revenue_query = (
+        select(func.coalesce(func.sum(models.Course.price), 0))
+        .select_from(models.Enrollment)
+        .join(models.Course, models.Enrollment.course_id == models.Course.id)
+        .where(models.Enrollment.enrollment_type == "paid")
+    )
+    if course_scope:
+        revenue_query = revenue_query.where(*course_scope)
+    revenue_row = await db.execute(revenue_query)
+    revenue = int(revenue_row.scalar() or 0)
+
+    students_query = select(func.count(models.User.id)).where(models.User.role == "student")
+    students_row = await db.execute(students_query)
+    student_count = int(students_row.scalar() or 0)
+
+    courses_query = select(func.count(models.Course.id))
+    if course_scope:
+        courses_query = courses_query.where(*course_scope)
+    courses_row = await db.execute(courses_query)
+    course_count = int(courses_row.scalar() or 0)
+
+    since = datetime.utcnow() - timedelta(days=30)
+    enroll_query = select(func.count(models.Enrollment.id)).where(models.Enrollment.enrolled_at >= since)
+    if course_scope:
+        enroll_query = enroll_query.join(models.Course, models.Enrollment.course_id == models.Course.id).where(
+            *course_scope
+        )
+    enroll_row = await db.execute(enroll_query)
+    new_enrollments = int(enroll_row.scalar() or 0)
+
+    return {
+        "revenue": revenue,
+        "students": student_count,
+        "courses": course_count,
+        "new_enrollments": new_enrollments,
+    }
+
 
 @app.get("/api/v1/admin/students")
 async def get_all_students(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):

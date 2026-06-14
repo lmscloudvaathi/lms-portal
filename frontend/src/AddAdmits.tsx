@@ -94,7 +94,7 @@ const AddAdmits = () => {
       await axios.post(`${API_BASE_URL}/admin/admit-student`, payload, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      triggerToast(`✅ Account Created & Email Sent to ${singleEmail}`, "success");
+      triggerToast(`Account created for ${singleEmail}. They can sign in with Google or email.`, "success");
       setSingleName(""); setSingleEmail(""); setSelectedCourseIds([]);
     } catch (err: any) { triggerToast(`Error: ${err.response?.data?.detail || "Failed"}`, "error"); }
     finally { setSingleLoading(false); }
@@ -108,10 +108,12 @@ const AddAdmits = () => {
     formData.append("course_id", bulkCourseId.toString());
     try {
       const token = localStorage.getItem("token");
-      await axios.post(`${API_BASE_URL}/admin/bulk-admit`, formData, {
+      const res = await axios.post(`${API_BASE_URL}/admin/bulk-admit`, formData, {
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "multipart/form-data" }
       });
-      triggerToast(`🎉 Bulk Process Complete! Emails Sent.`, "success");
+      const created = res.data?.created_users ?? 0;
+      const enrolled = res.data?.enrolled ?? 0;
+      triggerToast(`Created ${created} account(s), enrolled ${enrolled} student(s). They can sign in with Google.`, "success");
       setBulkFile(null);
     } catch (err: any) { triggerToast("Upload failed", "error"); }
     finally { setBulkLoading(false); }
@@ -123,7 +125,7 @@ const AddAdmits = () => {
   };
 
   const downloadTemplate = () => {
-    const csvContent = "data:text/csv;charset=utf-8,Name,Email\nJohn Doe,john@college.edu";
+    const csvContent = "data:text/csv;charset=utf-8,name,email\nJohn Doe,john@college.edu";
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);

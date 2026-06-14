@@ -172,7 +172,7 @@ const CourseCard = ({ course, type, navigate, handleFreeEnroll, openEnrollModal,
 const StudentDashboard = () => {
     const navigate = useNavigate();
     const RAZORPAY_PAYLINK_URL = import.meta.env.VITE_RAZORPAY_PAYLINK_URL;
-    const [activeTab, setActiveTab] = useState("home");
+    const [activeTab, setActiveTab] = useState("explore");
 
     // ✅ NEW: Sub-tab for My Learning (Standard vs Coding)
     const [learningSubTab, setLearningSubTab] = useState("standard");

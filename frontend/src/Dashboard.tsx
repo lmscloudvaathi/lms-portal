@@ -82,17 +82,26 @@ const Dashboard = () => {
         // 1. Fetch Real Courses Count
         const coursesRes = await axios.get(`${API_BASE_URL}/courses`, config);
 
-        // 2. Fetch Real Students Count (Only if instructor)
+        // 2. Dashboard stats from API (revenue = paid enrollments only, not ₹599 × users)
         let studentCount = 0;
+        let courseCount = 0;
+        let revenue = 0;
+        let newEnrollments = 0;
+
         if (storedRole === "instructor" || storedRole === "admin") {
           try {
-            const studentsRes = await axios.get(`${API_BASE_URL}/admin/students`, config); studentCount = studentsRes.data.length;
-          } catch (e) { console.log("Not authorized to fetch students"); }
+            const statsRes = await axios.get(`${API_BASE_URL}/instructor/dashboard-stats`, config);
+            revenue = Number(statsRes.data.revenue) || 0;
+            studentCount = Number(statsRes.data.students) || 0;
+            courseCount = Number(statsRes.data.courses) || 0;
+            newEnrollments = Number(statsRes.data.new_enrollments) || 0;
+          } catch (e) {
+            console.log("Dashboard stats unavailable", e);
+            courseCount = coursesRes.data.length;
+          }
+        } else {
+          courseCount = coursesRes.data.length;
         }
-
-        // 3. Calculate Real Stats
-        const courseCount = coursesRes.data.length;
-        const revenue = studentCount * 599; // Assuming ₹599 per student
 
         let pendingReviews = 0;
         let assignmentSubmissions = 0;
@@ -110,7 +119,7 @@ const Dashboard = () => {
           revenue,
           students: studentCount,
           courses: courseCount,
-          newEnrollments: studentCount,
+          newEnrollments,
           pendingReviews,
           assignmentSubmissions,
         });
