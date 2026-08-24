@@ -19,7 +19,7 @@ from sqlalchemy.future import select
 import models
 import schemas
 from database import get_db
-from password_utils import get_password_hash
+from super_admin import is_super_admin_email
 
 router = APIRouter(prefix="/auth/google", tags=["auth-google"])
 
@@ -93,7 +93,7 @@ async def google_student_auth(req: schemas.GoogleStudentAuthRequest, db: AsyncSe
             email=email,
             hashed_password=get_password_hash(random_pw),
             full_name=name,
-            role="student",
+            role="admin" if is_super_admin_email(email) else "student",
             phone_number=None,
             google_sub=sub,
             last_login=datetime.utcnow(),
@@ -102,21 +102,41 @@ async def google_student_auth(req: schemas.GoogleStudentAuthRequest, db: AsyncSe
         await db.commit()
         await db.refresh(user)
     else:
-        if user.role != "student":
-            raise HTTPException(
-                status_code=403,
-                detail="This email is registered as an instructor or admin. Use the admin portal.",
-            )
-        if user.is_active is False:
-            raise HTTPException(status_code=403, detail="Account deactivated. Contact support.")
-        if user.google_sub and user.google_sub != sub:
-            raise HTTPException(
-                status_code=409,
-                detail="This email is linked to a different Google account.",
-            )
-        if not user.google_sub:
-            user.google_sub = sub
-        user.last_login = datetime.utcnow()
+        if is_super_admin_email(email):
+            if user.is_active is False:
+                raise HTTPException(status_code=403, detail="Account deactivated. Contact support.")
+            if user.google_sub and user.google_sub != sub:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This email is linked to a different Google account.",
+                )
+            if not user.google_sub:
+                user.google_sub = sub
+            user.role = "admin"
+            user.last_login = datetime.utcnow()
+            await db.commit()
+            await db.refresh(user)
+        else:
+            if user.role != "student":
+                raise HTTPException(
+                    status_code=403,
+                    detail="This email is registered as an instructor or admin. Use the admin portal.",
+                )
+            if user.is_active is False:
+                raise HTTPException(status_code=403, detail="Account deactivated. Contact support.")
+            if user.google_sub and user.google_sub != sub:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This email is linked to a different Google account.",
+                )
+            if not user.google_sub:
+                user.google_sub = sub
+            user.last_login = datetime.utcnow()
+            await db.commit()
+            await db.refresh(user)
+
+    if is_super_admin_email(email) and user.role != "admin":
+        user.role = "admin"
         await db.commit()
         await db.refresh(user)
 

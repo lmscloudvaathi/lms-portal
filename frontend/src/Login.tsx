@@ -16,12 +16,29 @@ import {
   X,
 } from "lucide-react";
 import BrandLogo from "./components/BrandLogo";
-import { saveSession } from "./utils/session";
+import SiteHeader from "./components/SiteHeader";
+import SiteFooter from "./components/SiteFooter";
+import { saveSession, isSuperAdminEmail, resolveStaffRole } from "./utils/session";
 
 interface ToastState {
   show: boolean;
   message: string;
   type: "success" | "error";
+}
+
+const isStaffRole = (role: string) => role === "instructor" || role === "admin";
+
+function apiErrorMessage(err: unknown, fallback: string): string {
+  const ax = err as { response?: { data?: { detail?: unknown } } };
+  if (!ax.response) {
+    return "Cannot reach the server. Check your connection and try again.";
+  }
+  const detail = ax.response.data?.detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail) && detail[0] && typeof detail[0] === "object" && "msg" in detail[0]) {
+    return String((detail[0] as { msg: string }).msg);
+  }
+  return fallback;
 }
 
 /** Single Google button; mount in only one panel at a time to avoid duplicate GSI init. */
@@ -39,7 +56,7 @@ function LearnerGoogleButton({
         onSuccess={(res) => onCredential(res.credential)}
         onError={onError}
         useOneTap={false}
-        theme="outline"
+        theme="filled_black"
         text="continue_with"
         shape="rectangular"
         size="large"
@@ -61,8 +78,8 @@ const Login = () => {
 
   const [formData, setFormData] = useState({ email: "", password: "", name: "" });
 
-  const activeBg = isSignUp ? "bg-[#87C232]" : "bg-[#005EB8]";
-  const activeText = isSignUp ? "text-[#87C232]" : "text-[#005EB8]";
+  const activeBg = "bg-gradient-neon";
+  const activeText = "text-gradient-neon";
 
   const API_URL = API_BASE_URL;
 
@@ -79,19 +96,25 @@ const Login = () => {
     setLoading(true);
     try {
       const res = await axios.post(`${API_URL}/auth/google/student`, { credential, mode });
+      const email = String(res.data.email || "").trim();
+      if (isSuperAdminEmail(email)) {
+        saveSession(res.data.access_token, "admin", email);
+        triggerToast("Signed in as administrator. Redirecting…", "success");
+        setTimeout(() => navigate("/dashboard"), 900);
+        return;
+      }
       if (res.data.role !== "student") {
         triggerToast("Please use the Admin Portal for instructor access.", "error");
         return;
       }
-      saveSession(res.data.access_token, res.data.role);
+      saveSession(res.data.access_token, res.data.role, email);
       triggerToast(
         mode === "signup" ? "Welcome! Your account is ready. Redirecting…" : "Signed in with Google. Redirecting…",
         "success"
       );
       setTimeout(() => navigate("/student-dashboard"), 900);
     } catch (err: unknown) {
-      const ax = err as { response?: { data?: { detail?: string } } };
-      triggerToast(ax.response?.data?.detail || "Google sign-in failed.", "error");
+      triggerToast(apiErrorMessage(err, "Google sign-in failed."), "error");
     } finally {
       setLoading(false);
     }
@@ -128,8 +151,7 @@ const Login = () => {
       const hint = res.data?.hint ? ` ${res.data.hint}` : "";
       triggerToast(`${res.data?.message || "Verification code sent."}${hint}`, "success");
     } catch (err: unknown) {
-      const ax = err as { response?: { data?: { detail?: string } } };
-      triggerToast(ax.response?.data?.detail || "Could not send verification email.", "error");
+      triggerToast(apiErrorMessage(err, "Could not send verification email."), "error");
     } finally {
       setLoading(false);
     }
@@ -188,18 +210,19 @@ const Login = () => {
         loginParams.append("password", formData.password);
 
         const res = await axios.post(`${API_URL}/login`, loginParams);
-
-        if (res.data.role !== "student") {
-          triggerToast("Please use the Admin Portal for Instructor access.", "error");
-          setLoading(false);
+        const email = formData.email.trim();
+        const role = resolveStaffRole(email, String(res.data.role || ""));
+        const dest = role === "student" ? "/student-dashboard" : isStaffRole(role) ? "/dashboard" : "";
+        if (!dest) {
+          triggerToast("This account type cannot sign in here.", "error");
           return;
         }
-        saveSession(res.data.access_token, res.data.role);
-        triggerToast("Login Successful! Redirecting...", "success");
-        setTimeout(() => navigate("/student-dashboard"), 1000);
+
+        saveSession(res.data.access_token, role, email);
+        triggerToast(role === "admin" ? "Welcome back, Administrator!" : "Login Successful! Redirecting...", "success");
+        setTimeout(() => navigate(dest), 1000);
       } catch (err: unknown) {
-        const ax = err as { response?: { data?: { detail?: string } } };
-        triggerToast(ax.response?.data?.detail || "Authentication failed. Check credentials.", "error");
+        triggerToast(apiErrorMessage(err, "Authentication failed. Check credentials."), "error");
       } finally {
         setLoading(false);
       }
@@ -209,16 +232,22 @@ const Login = () => {
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-[#E2E8F0] font-sans p-4 overflow-hidden relative">
-      <button
-        type="button"
-        onClick={() => navigate("/admin-login")}
-        className="absolute top-4 right-4 lg:top-6 lg:right-6 flex items-center gap-2 px-3 py-1.5 lg:px-4 lg:py-2 bg-white rounded-full shadow-md text-slate-600 hover:text-[#005EB8] hover:shadow-lg transition-all z-50 font-bold text-xs lg:text-sm border border-slate-200"
-      >
-        <ShieldCheck size={16} className="lg:w-[18px] lg:h-[18px]" /> Admin Access
-      </button>
+    <div className="relative min-h-screen flex flex-col font-sans">
+      <SiteHeader
+        current="lms"
+        rightSlot={
+          <button
+            type="button"
+            onClick={() => navigate("/admin-login")}
+            className="ml-1 inline-flex items-center gap-2 rounded-full glass px-3 py-1.5 text-xs font-semibold text-foreground hover:border-primary sm:px-4 sm:text-sm"
+          >
+            <ShieldCheck size={16} /> Admin
+          </button>
+        }
+      />
 
-      <div className="relative bg-[#F8FAFC] rounded-[20px] shadow-2xl overflow-hidden w-full max-w-[500px] lg:max-w-[1000px] min-h-[550px] lg:min-h-[600px] flex border border-slate-200 flex-col lg:block">
+      <main className="flex flex-1 items-center justify-center p-4 py-10">
+      <div className="relative glass rounded-[20px] overflow-hidden w-full max-w-[500px] lg:max-w-[1000px] min-h-[550px] lg:min-h-[600px] flex flex-col lg:block glow-violet">
         <div
           className={`
              lg:absolute lg:top-0 lg:left-0 lg:w-1/2 lg:h-full lg:transition-all lg:duration-700 lg:ease-in-out lg:z-20
@@ -227,7 +256,7 @@ const Login = () => {
         >
           <form
             onSubmit={handleAuth}
-            className="bg-[#F8FAFC] flex flex-col items-center justify-center w-full h-full px-8 py-10 lg:px-12 text-center"
+            className="bg-transparent flex flex-col items-center justify-center w-full h-full px-8 py-10 lg:px-12 text-center"
           >
             <div className="mb-4">
               <BrandLogo size="xl" showTagline />
@@ -306,7 +335,7 @@ const Login = () => {
           {!showSignupOtpInput ? (
             <form
               onSubmit={handleAuth}
-              className="bg-[#F8FAFC] flex flex-col items-center justify-center w-full h-full px-8 py-10 lg:px-12 text-center"
+              className="bg-transparent flex flex-col items-center justify-center w-full h-full px-8 py-10 lg:px-12 text-center"
             >
               <h1 className={`text-3xl font-bold mb-2 ${activeText}`}>Create Account</h1>
               <p className="text-slate-400 text-sm mb-3 max-w-[350px]">
@@ -403,7 +432,7 @@ const Login = () => {
               </div>
             </form>
           ) : (
-            <div className="bg-[#F8FAFC] flex flex-col items-center justify-center h-full px-8 py-10 lg:px-12 text-center w-full animate-fade-in">
+            <div className="bg-transparent flex flex-col items-center justify-center h-full px-8 py-10 lg:px-12 text-center w-full animate-fade-in">
               <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
                 <MessageSquare className="text-[#87C232]" size={32} />
               </div>
@@ -507,6 +536,8 @@ const Login = () => {
           </div>
         </div>
       </div>
+      </main>
+      <SiteFooter />
 
       {toast.show && (
         <div

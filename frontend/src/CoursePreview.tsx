@@ -53,12 +53,12 @@ const CoursePreview = () => {
 
   // 🎨 PROFESSIONAL THEME
   const brand = {
-    blue: "#005EB8",
-    green: "#87C232",
-    textMain: "#1e293b",
-    textLight: "#64748b",
-    cardBg: "#F8FAFC",
-    border: "#cbd5e1"
+    blue: "var(--neon-cyan)",
+    green: "var(--neon-cyan)",
+    textMain: "var(--foreground)",
+    textLight: "var(--muted-foreground)",
+    cardBg: "var(--surface)",
+    border: "var(--border)"
   };
 
   const triggerToast = (message: string, type: "success" | "error" = "success") => {

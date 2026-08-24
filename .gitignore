@@ -25,6 +25,12 @@ pip-delete-this-directory.txt
 .env
 backend/.env
 frontend/.env
+backend/uploads/
+backend/generated/
+backend/*.db
+backend/*.db-journal
+backend/*.db-wal
+backend/*.db-shm
 .DS_Store
 .vscode/
 *.zip

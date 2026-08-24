@@ -61,12 +61,12 @@ const Dashboard = () => {
 
   // 🎨 PROFESSIONAL THEME COLORS
   const theme = {
-    cardBg: "#F8FAFC",      // Off-White / Very Light Gray
-    border: "#cbd5e1",      // Subtle Border
-    textMain: "#1e293b",    // Dark Slate
-    textLight: "#64748b",   // Muted Slate
-    iconColor: "#64748b",   // Neutral Icon Color
-    chartLine: "#334155"    // Professional Chart Line Color
+    cardBg: "oklch(17% 0.04 270)",
+    border: "oklch(30% 0.05 280 / 0.6)",
+    textMain: "oklch(97% 0.01 250)",
+    textLight: "oklch(70% 0.03 260)",
+    iconColor: "oklch(86% 0.17 200)",
+    chartLine: "oklch(82% 0.18 200)"
   };
 
   useEffect(() => {
@@ -288,16 +288,16 @@ const Dashboard = () => {
         <h3 className="text-base font-bold text-slate-800 mb-5">Student Activity</h3>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={activityData}>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-            <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#64748b", fontSize: 12 }} dy={10} />
-            <YAxis axisLine={false} tickLine={false} tick={{ fill: "#64748b", fontSize: 12 }} />
+            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="oklch(30% 0.05 280 / 0.4)" />
+            <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "oklch(70% 0.03 260)", fontSize: 12 }} dy={10} />
+            <YAxis axisLine={false} tickLine={false} tick={{ fill: "oklch(70% 0.03 260)", fontSize: 12 }} />
             <Tooltip
               contentStyle={{
                 borderRadius: '12px',
-                border: 'none',
-                boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)',
-                background: '#FFFFFF',
-                color: '#1e293b'
+                border: '1px solid oklch(30% 0.05 280 / 0.6)',
+                boxShadow: '0 20px 50px -24px oklch(5% 0.02 270 / 0.8)',
+                background: 'oklch(17% 0.04 270)',
+                color: 'oklch(97% 0.01 250)'
               }}
             />
             <Line

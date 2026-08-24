@@ -103,9 +103,9 @@ const CodingCourseManager = () => {
   const filteredChallenges = challenges.filter(c => c.difficulty === activeTab);
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] font-sans relative">
+    <div className="relative font-sans">
       {/* 1. Header Area */}
-      <header className="bg-white border-b border-slate-200 px-8 py-5 flex justify-between items-center sticky top-0 z-10">
+      <header className="glass border-b border-border px-4 md:px-8 py-5 flex justify-between items-center sticky top-0 z-10">
         <div className="flex items-center gap-4">
             <button onClick={() => navigate(-1)} className="p-2 bg-slate-100 hover:bg-slate-200 rounded-full transition-colors text-slate-600">
                 <ArrowLeft size={20} />

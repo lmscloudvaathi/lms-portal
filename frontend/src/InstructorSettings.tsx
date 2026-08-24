@@ -19,12 +19,12 @@ const InstructorSettings = () => {
 
   // 🎨 PROFESSIONAL THEME
   const brand = { 
-    blue: "#005EB8", 
-    green: "#87C232",
-    cardBg: "#F8FAFC", 
-    border: "#cbd5e1",
-    textMain: "#1e293b",
-    textLight: "#64748b"
+    blue: "var(--neon-cyan)", 
+    green: "var(--neon-cyan)",
+    cardBg: "var(--surface)", 
+    border: "var(--border)",
+    textMain: "var(--foreground)",
+    textLight: "var(--muted-foreground)"
   };
 
   const handlePasswordChange = async (e: React.FormEvent) => {
@@ -67,16 +67,16 @@ const InstructorSettings = () => {
 
             <form onSubmit={handlePasswordChange}>
                 <div style={{ marginBottom: "24px" }}>
-                    <label style={{ display: "block", fontSize: "12px", fontWeight: "700", color: brand.textMain, marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.5px" }}>New Password</label>
+                    <label className="cv-label">New Password</label>
                     <input 
                         type="password" required minLength={6} 
                         value={newPassword} 
                         onChange={(e) => setNewPassword(e.target.value)} 
-                        placeholder="Enter new strong password" 
-                        style={{ width: "100%", padding: "14px", borderRadius: "10px", border: `1px solid ${brand.border}`, outline: "none", fontSize: "14px", boxSizing: "border-box", background: "white", color: brand.textMain }} 
+                        placeholder="Enter a strong password (min 6 characters)" 
+                        className="cv-input"
                     />
                 </div>
-                <button type="submit" disabled={saving} style={{ width: "100%", padding: "14px", background: brand.blue, color: "white", border: "none", borderRadius: "10px", fontWeight: "700", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", opacity: saving ? 0.7 : 1, boxShadow: "0 4px 12px rgba(0, 94, 184, 0.2)" }}>
+                <button type="submit" disabled={saving} className="cv-btn-primary w-full disabled:opacity-70">
                     <Save size={18} /> {saving ? "Updating..." : "Update Password"}
                 </button>
             </form>

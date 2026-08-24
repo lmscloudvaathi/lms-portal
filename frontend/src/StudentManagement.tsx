@@ -36,13 +36,13 @@ const StudentManagement = () => {
 
   // 🎨 THEME
   const brand = {
-    blue: "#005EB8",
-    textMain: "#1e293b",
-    textLight: "#64748b",
-    cardBg: "#F8FAFC",
-    border: "#cbd5e1",
+    blue: "var(--neon-cyan)",
+    textMain: "var(--foreground)",
+    textLight: "var(--muted-foreground)",
+    cardBg: "var(--surface)",
+    border: "var(--border)",
     danger: "#ef4444",
-    green: "#87C232" // Added green for success toast
+    green: "var(--neon-cyan)"
   };
 
   useEffect(() => {
@@ -123,6 +123,7 @@ const StudentManagement = () => {
             placeholder="Search students..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            className="cv-input !pl-10"
             style={{
               width: "100%", padding: "10px 10px 10px 40px", borderRadius: "10px",
               border: `1px solid ${brand.border}`, outline: "none", fontSize: "14px"
@@ -152,10 +153,10 @@ const StudentManagement = () => {
                 <tr><td colSpan={5} style={{ padding: "40px", textAlign: "center", color: brand.textLight }}>No students found.</td></tr>
               ) : (
                 filteredStudents.map(student => (
-                  <tr key={student.id} style={{ borderBottom: `1px solid ${brand.border}`, background: "white", transition: "background 0.2s" }} onMouseOver={(e) => e.currentTarget.style.background = "#f8fafc"} onMouseOut={(e) => e.currentTarget.style.background = "white"}>
+                  <tr key={student.id} className="cv-table-row">
                     <td style={{ padding: "20px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                        <div style={{ width: "36px", height: "36px", borderRadius: "50%", background: "#e0f2fe", color: brand.blue, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <div style={{ width: "36px", height: "36px", borderRadius: "50%", background: "color-mix(in oklab, var(--neon-cyan) 16%, var(--input))", color: brand.blue, display: "flex", alignItems: "center", justifyContent: "center" }}>
                           <User size={18} />
                         </div>
                         <div>
@@ -176,7 +177,7 @@ const StudentManagement = () => {
                         <span style={{ color: brand.textLight, fontSize: "18px", letterSpacing: "2px", lineHeight: "0" }}>••••••</span>
                         <button
                           onClick={() => setResetModal({ id: student.id, name: student.full_name })}
-                          style={{ padding: "6px", background: "#f0f9ff", color: brand.blue, border: `1px solid ${brand.border}`, borderRadius: "6px", cursor: "pointer" }}
+                          style={{ padding: "6px", background: "var(--input)", color: brand.blue, border: `1px solid ${brand.border}`, borderRadius: "6px", cursor: "pointer" }}
                           title="Reset Password"
                         >
                           <RefreshCw size={14} />
@@ -247,10 +248,10 @@ const StudentManagement = () => {
 
               <input
                 type="text"
+                className="cv-input mb-5"
                 placeholder="Enter new password..."
                 value={newPass}
                 onChange={(e) => setNewPass(e.target.value)}
-                style={{ width: "100%", padding: "12px", borderRadius: "8px", border: `2px solid ${brand.border}`, marginBottom: "20px", outline: "none", fontWeight: "bold", color: brand.textMain }}
               />
 
               <div style={{ display: "flex", gap: "12px" }}>

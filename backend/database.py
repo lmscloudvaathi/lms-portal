@@ -2,19 +2,39 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.orm import declarative_base
 import os
 import ssl
+from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from dotenv import load_dotenv
 
-load_dotenv()
+_BACKEND_DIR = Path(__file__).resolve().parent
+load_dotenv(_BACKEND_DIR / ".env")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL is missing in .env file!")
 
+
+def _absolutize_sqlite(url: str) -> str:
+    prefix = "sqlite+aiosqlite:///"
+    if not url.startswith(prefix):
+        return url
+    raw_path = url[len(prefix):]
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = (_BACKEND_DIR / path).resolve()
+    return f"{prefix}{path.as_posix()}"
+
+
 # Normalize DB URL to an async driver so one env var works for both
-# PostgreSQL and TiDB/MySQL deployments.
-if DATABASE_URL.startswith("postgresql+asyncpg://"):
+# PostgreSQL, TiDB/MySQL, and local SQLite.
+if DATABASE_URL.startswith("sqlite+aiosqlite://"):
+    ASYNC_DATABASE_URL = _absolutize_sqlite(DATABASE_URL)
+elif DATABASE_URL.startswith("sqlite://"):
+    ASYNC_DATABASE_URL = _absolutize_sqlite(
+        DATABASE_URL.replace("sqlite://", "sqlite+aiosqlite://", 1)
+    )
+elif DATABASE_URL.startswith("postgresql+asyncpg://"):
     ASYNC_DATABASE_URL = DATABASE_URL
 elif DATABASE_URL.startswith("postgresql://"):
     ASYNC_DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
@@ -24,6 +44,8 @@ elif DATABASE_URL.startswith("mysql://"):
     ASYNC_DATABASE_URL = DATABASE_URL.replace("mysql://", "mysql+aiomysql://", 1)
 else:
     ASYNC_DATABASE_URL = DATABASE_URL
+
+IS_SQLITE = ASYNC_DATABASE_URL.startswith("sqlite")
 
 # TiDB examples often include mysql-connector style SSL flags that aiomysql
 # does not accept as keyword arguments. Strip them to avoid startup failure.
@@ -49,16 +71,19 @@ if ASYNC_DATABASE_URL.startswith("mysql+aiomysql://"):
     ssl_ctx = ssl.create_default_context(cafile=ca_path) if ca_path else ssl.create_default_context()
     CONNECT_ARGS["ssl"] = ssl_ctx
 
-engine = create_async_engine(
-    ASYNC_DATABASE_URL,
-    echo=False,
-    connect_args=CONNECT_ARGS,
-    pool_size=5,
-    max_overflow=10,
-    pool_timeout=30,
-    pool_recycle=1800,
-    pool_pre_ping=True,
-)
+if IS_SQLITE:
+    engine = create_async_engine(ASYNC_DATABASE_URL, echo=False)
+else:
+    engine = create_async_engine(
+        ASYNC_DATABASE_URL,
+        echo=False,
+        connect_args=CONNECT_ARGS,
+        pool_size=5,
+        max_overflow=10,
+        pool_timeout=30,
+        pool_recycle=1800,
+        pool_pre_ping=True,
+    )
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,

@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, DateTime, Text, JSON
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, DateTime, Text, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship
 from database import Base
 from datetime import datetime
@@ -29,11 +29,12 @@ class Course(Base):
     title = Column(String(255))
     description = Column(String(1000))
     price = Column(Integer)
-    image_url = Column(String(1000), nullable=True)
+    image_url = Column(Text, nullable=True)
     is_published = Column(Boolean, default=False)
     instructor_id = Column(Integer, ForeignKey("users.id"))
     course_type = Column(String(32), default="standard") # 'standard' or 'coding'
     language = Column(String(64), nullable=True) # e.g., 'python', 'javascript' (for compiler)
+    category = Column(String(64), nullable=True) # e.g. programming, data-science
     modules = relationship("Module", back_populates="course")
     enrollments = relationship("Enrollment", back_populates="course")
     challenges = relationship("CourseChallenge", back_populates="course")
@@ -42,7 +43,7 @@ class Module(Base):
     __tablename__ = "modules"
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(255))
-    order = Column(Integer)
+    order = Column("order", Integer)
     course_id = Column(Integer, ForeignKey("courses.id"))
     
     course = relationship("Course", back_populates="modules")
@@ -186,12 +187,23 @@ class UserCertificate(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     course_id = Column(Integer, ForeignKey("courses.id"))
-    certificate_id = Column(String(64), unique=True) # Unique UUID for verification
+    certificate_id = Column(String(64), unique=True, index=True)
+    recipient_name = Column(String(255), nullable=True)
+    body_text = Column(Text, nullable=True)
     issued_at = Column(DateTime, default=datetime.utcnow)
-    pdf_url = Column(String(1000), nullable=True) # Optional if you store PDF file path
+    pdf_url = Column(String(1000), nullable=True)
+    status = Column(String(32), default="PENDING")
+    email_status = Column(String(32), default="PENDING")
 
     user = relationship("User")
-    course = relationship("Course")    
+    course = relationship("Course")
+    __table_args__ = (UniqueConstraint("user_id", "course_id", name="uq_user_course_certificate"),)
+
+
+class CertificateIdSequence(Base):
+    __tablename__ = "certificate_id_sequences"
+    prefix = Column(String(32), primary_key=True)
+    next_number = Column(Integer, default=10001) 
 
 class Notification(Base):
     __tablename__ = "notifications"

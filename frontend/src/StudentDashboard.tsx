@@ -2,13 +2,13 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import Editor from "@monaco-editor/react";
-import API_BASE_URL from './config';
+import API_BASE_URL, { resolveMediaUrl } from './config';
 import { runTestCasesLocally } from './utils/pyodideEnv';
 import {
     LayoutDashboard, BookOpen, Compass, Award, LogOut,
     CheckCircle, AlertTriangle, X,
     Code, Play, Monitor, ChevronRight, Cloud, Flag,
-    Menu, Sparkles, Zap, User, PlayCircle, Trophy, Lock, BellRing, Trash2, Settings, Download, Clock
+    Menu, Sparkles, User, PlayCircle, Trophy, Lock, BellRing, Trash2, Download, Clock, ExternalLink
 } from "lucide-react";
 import { motion } from "framer-motion";
 
@@ -18,8 +18,11 @@ import * as blazeface from "@tensorflow-models/blazeface";
 
 import "@tensorflow/tfjs-backend-webgl";
 import BrandLogo from "./components/BrandLogo";
+import ProfileMenu from "./components/ProfileMenu";
 import { CODE_TEMPLATES } from './utils/codeTemplates';
-import { clearSession, getValidSession } from "./utils/session";
+import { clearSession, getValidSession, isStudentSession } from "./utils/session";
+import { categoryLabel, groupCoursesByCategory, resolveCourseCategory, type CourseCategoryId } from "./utils/courseCategories";
+import { certificateVerifyPath, downloadCertificatePdf } from "./utils/certificates";
 
 // --- TYPES ---
 interface Course {
@@ -31,10 +34,13 @@ interface Course {
     instructor_id: number;
     // ✅ Updated Fields
     course_type?: string; // "standard" | "coding"
+    category?: string;
+    language?: string;
     enrollment_type?: "paid" | "trial";
     days_left?: number;
     is_trial_expired?: boolean;
     has_certificate?: boolean;
+    certificate_id?: string | null;
 }
 
 interface CodeTest { id: number; title: string; time_limit: number; problems: any[]; completed?: boolean; }
@@ -56,8 +62,8 @@ const NavItem = ({ icon, label, active, onClick }: any) => (
     <button
         onClick={onClick}
         className={`flex items-center gap-2 px-4 py-2 rounded-full transition-all text-sm font-bold ${active
-            ? "bg-blue-50 text-[#005EB8]"
-            : "text-slate-500 hover:text-slate-800 hover:bg-slate-100"
+            ? "bg-secondary text-primary"
+            : "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
             }`}
     >
         {icon} {label}
@@ -71,11 +77,83 @@ const StatCard = ({ icon: Icon, label, value }: any) => (
     </motion.div>
 );
 
-const CourseCard = ({ course, type, navigate, handleFreeEnroll, openEnrollModal, handleDownloadSyllabus, onPayClick }: any) => {
-    const getImageUrl = (url: string) => {
-        if (!url) return "";
-        return url.startsWith('http') ? url : `${API_BASE_URL.replace('/api/v1', '')}/${url}`;
-    };
+type CourseProgress = { percent: number; completed: number; total: number };
+
+const CourseProgressVisual = ({ progress }: { progress?: CourseProgress }) => {
+    const percent = Math.max(0, Math.min(100, Number(progress?.percent) || 0));
+    const completed = Number(progress?.completed) || 0;
+    const total = Number(progress?.total) || 0;
+    const done = percent >= 100 && total > 0;
+    const fill = done ? "#87C232" : "#005EB8";
+    const status = total === 0 ? "Not started" : done ? "Completed" : "In progress";
+
+    return (
+        <div className="mb-4">
+            <div className="flex items-center justify-between mb-1.5">
+                <span className={`text-[11px] font-bold uppercase tracking-wide ${done ? "text-[#87C232]" : "text-slate-500"}`}>
+                    {status}
+                </span>
+                <span className="text-xs font-extrabold text-slate-800 tabular-nums">{percent}%</span>
+            </div>
+            <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                <div
+                    className="h-full rounded-full transition-all duration-500 ease-out"
+                    style={{ width: `${percent}%`, background: fill }}
+                />
+            </div>
+            <div className="mt-1.5">
+                <span className="text-[11px] text-slate-400 font-medium">
+                    {total > 0 ? `${completed} of ${total} lessons` : "Lessons will appear here"}
+                </span>
+            </div>
+        </div>
+    );
+};
+
+const CourseProgressRing = ({ percent }: { percent: number }) => {
+    const value = Math.max(0, Math.min(100, Number(percent) || 0));
+    const size = 46;
+    const stroke = 3.5;
+    const radius = (size - stroke) / 2;
+    const circumference = 2 * Math.PI * radius;
+    const offset = circumference - (value / 100) * circumference;
+    const done = value >= 100;
+
+    return (
+        <div className="absolute bottom-2 right-2 bg-white/95 rounded-full shadow-sm p-0.5" title={`${value}% complete`}>
+            <div className="relative" style={{ width: size, height: size }}>
+                <svg width={size} height={size} className="-rotate-90">
+                    <circle cx={size / 2} cy={size / 2} r={radius} fill="white" stroke="#e2e8f0" strokeWidth={stroke} />
+                    <circle
+                        cx={size / 2}
+                        cy={size / 2}
+                        r={radius}
+                        fill="none"
+                        stroke={done ? "#87C232" : "#005EB8"}
+                        strokeWidth={stroke}
+                        strokeDasharray={circumference}
+                        strokeDashoffset={offset}
+                        strokeLinecap="round"
+                    />
+                </svg>
+                <span className="absolute inset-0 flex items-center justify-center text-[10px] font-extrabold text-slate-800 tabular-nums">
+                    {value}%
+                </span>
+            </div>
+        </div>
+    );
+};
+
+const formatStudentCourseAmount = (price: unknown): string | null => {
+    if (!isStudentSession()) return null;
+    if (price === null || price === undefined || price === "") return null;
+    const amount = Number(price);
+    if (!Number.isFinite(amount)) return null;
+    return amount === 0 ? "Free" : `₹${amount}`;
+};
+
+const CourseCard = ({ course, type, navigate, handleFreeEnroll, openEnrollModal, handleDownloadSyllabus, onPayClick, progress }: any) => {
+    const getImageUrl = (url: string) => resolveMediaUrl(url);
 
     return (
         <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden hover:-translate-y-1 hover:shadow-lg transition-all relative group">
@@ -87,7 +165,10 @@ const CourseCard = ({ course, type, navigate, handleFreeEnroll, openEnrollModal,
                 </div>
             )}
 
-            <div className="h-40 bg-slate-200 relative flex items-center justify-center">
+            <div
+                className={`h-40 bg-slate-200 relative flex items-center justify-center ${type === "enrolled" && !course.is_trial_expired ? "cursor-pointer" : ""}`}
+                onClick={() => { if (type === "enrolled" && !course.is_trial_expired) navigate(`/course/${course.id}`); }}
+            >
                 {course.image_url ? (
                     <img src={getImageUrl(course.image_url)} alt={course.title} className="w-full h-full object-cover" />
                 ) : (
@@ -108,13 +189,24 @@ const CourseCard = ({ course, type, navigate, handleFreeEnroll, openEnrollModal,
                         )}
                     </div>
                 )}
+                {type === "enrolled" && !course.is_trial_expired && (
+                    <CourseProgressRing percent={progress?.percent ?? 0} />
+                )}
             </div>
 
             <div className="p-5">
-                <h4 className="font-bold text-slate-800 mb-4 truncate" title={course.title}>{course.title}</h4>
+                <span className="inline-block mb-2 px-2.5 py-0.5 rounded-full bg-blue-50 text-[#005EB8] text-[10px] font-extrabold uppercase tracking-wide">
+                    {categoryLabel(resolveCourseCategory(course))}
+                </span>
+                <h4
+                    className={`font-bold text-slate-800 mb-3 truncate ${type === "enrolled" && !course.is_trial_expired ? "cursor-pointer hover:text-[#005EB8]" : ""}`}
+                    title={course.title}
+                    onClick={() => { if (type === "enrolled" && !course.is_trial_expired) navigate(`/course/${course.id}`); }}
+                >{course.title}</h4>
+                {type === "enrolled" && <CourseProgressVisual progress={progress} />}
 
                 <div className="flex justify-between items-center">
-                    {/* ✅ 2. DYNAMIC PRICE / STATUS DISPLAY */}
+                    {/* Course fee is visible only after a student logs in */}
                     {type === "enrolled" ? (
                         <div className="flex items-center gap-2">
                             {course.enrollment_type === "trial" ? (
@@ -122,7 +214,10 @@ const CourseCard = ({ course, type, navigate, handleFreeEnroll, openEnrollModal,
                                     onClick={(e) => { e.stopPropagation(); onPayClick(course); }}
                                     className="bg-green-100 text-green-700 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-200 transition-colors border border-green-200 animate-pulse"
                                 >
-                                    Pay ₹{course.price}
+                                    {(() => {
+                                        const amount = formatStudentCourseAmount(course.price);
+                                        return amount ? `Pay ${amount}` : "Pay & Unlock";
+                                    })()}
                                 </button>
                             ) : (
                                 <span className="text-sm font-bold text-slate-400">Lifetime Access</span>
@@ -130,7 +225,7 @@ const CourseCard = ({ course, type, navigate, handleFreeEnroll, openEnrollModal,
                         </div>
                     ) : (
                         <span className={`text-lg font-extrabold ${course.price === 0 ? "text-[#87C232]" : "text-[#005EB8]"}`}>
-                            {course.price === 0 ? "Free" : `₹${course.price}`}
+                            {formatStudentCourseAmount(course.price) ?? ""}
                         </span>
                     )}
 
@@ -148,10 +243,17 @@ const CourseCard = ({ course, type, navigate, handleFreeEnroll, openEnrollModal,
                             >
                                 <Download size={16} />
                             </button>
-
+                            <button
+                                onClick={() => navigate(`/course/${course.id}`)}
+                                disabled={course.is_trial_expired}
+                                className={`px-3 py-2 rounded-lg font-bold text-sm flex items-center gap-2 border transition-colors ${course.is_trial_expired ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed" : "bg-white border-slate-300 text-slate-700 hover:bg-slate-50"}`}
+                                title="Progress dashboard"
+                            >
+                                <LayoutDashboard size={14} />
+                            </button>
                             <button
                                 onClick={() => navigate(`/course/${course.id}/player`)}
-                                disabled={course.is_trial_expired} // 🚫 Disable if trial expired
+                                disabled={course.is_trial_expired}
                                 className={`px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 transition-colors ${course.is_trial_expired ? "bg-slate-300 text-slate-500 cursor-not-allowed" : "bg-slate-800 text-white hover:bg-slate-900"}`}
                             >
                                 <PlayCircle size={14} /> {course.is_trial_expired ? "Locked" : "Resume"}
@@ -172,17 +274,17 @@ const CourseCard = ({ course, type, navigate, handleFreeEnroll, openEnrollModal,
 const StudentDashboard = () => {
     const navigate = useNavigate();
     const RAZORPAY_PAYLINK_URL = import.meta.env.VITE_RAZORPAY_PAYLINK_URL;
-    const [activeTab, setActiveTab] = useState("explore");
+    const [activeTab, setActiveTab] = useState("home");
 
     // ✅ NEW: Sub-tab for My Learning (Standard vs Coding)
     const [learningSubTab, setLearningSubTab] = useState("standard");
+    const [exploreCategory, setExploreCategory] = useState<"all" | CourseCategoryId>("all");
 
     const [availableCourses, setAvailableCourses] = useState<Course[]>([]);
     const [enrolledCourses, setEnrolledCourses] = useState<Course[]>([]);
     const [loading, setLoading] = useState(true);
     const [progressMap, setProgressMap] = useState<{ [key: number]: { percent: number, completed: number, total: number } }>({});
     const [collapsed, setCollapsed] = useState(false);
-    const [showProfileMenu, setShowProfileMenu] = useState(false);
     const [notifications, setNotifications] = useState<any[]>([]);
     const [unreadCount, setUnreadCount] = useState(0);
     const [studentProfile, setStudentProfile] = useState({ name: "Loading...", email: "..." });
@@ -243,7 +345,7 @@ const StudentDashboard = () => {
 
     // 🎨 PROFESSIONAL THEME PALETTE
     const brand = {
-        cloudBlue: "#005EB8", cloudGreen: "#87C232", mainBg: "#E2E8F0", cardBg: "#F8FAFC", border: "#cbd5e1", textMain: "#1e293b", textLight: "#64748b"
+        cloudBlue: "var(--neon-cyan)", cloudGreen: "var(--neon-cyan)", mainBg: "transparent", cardBg: "var(--surface)", border: "var(--border)", textMain: "var(--foreground)", textLight: "var(--muted-foreground)"
     };
 
     const languages = [
@@ -313,7 +415,7 @@ const StudentDashboard = () => {
             setAvailableCourses(allData.filter((c: any) => !myCourseIds.has(c.id)));
             setEnrolledCourses(myData);
         } catch (err: any) {
-            if (err.response?.status === 401) { clearSession(); navigate("/login"); }
+            if (err.response?.status === 401) { clearSession(); navigate("/"); }
         } finally {
             setLoading(false);
         }
@@ -346,7 +448,7 @@ const StudentDashboard = () => {
 
     useEffect(() => {
         const session = getValidSession();
-        if (!session) { navigate("/login"); return; }
+        if (!session) { navigate("/"); return; }
         if (session.role === "instructor") { navigate("/dashboard"); return; }
         fetchData();
         fetchCodeTests();
@@ -367,6 +469,12 @@ const StudentDashboard = () => {
             setProgressMap(prev => ({ ...prev, ...lockedProgress }));
         }
     }, [enrolledCourses]);
+
+    const exploreGroups = useMemo(() => groupCoursesByCategory(availableCourses), [availableCourses]);
+    const visibleExploreGroups = useMemo(
+        () => exploreCategory === "all" ? exploreGroups : exploreGroups.filter((group) => group.id === exploreCategory),
+        [exploreCategory, exploreGroups]
+    );
 
     const fetchCourseProgress = async (courseId: number) => {
         try {
@@ -956,19 +1064,7 @@ const StudentDashboard = () => {
     const handleDownloadCertificate = async (courseId: number, courseTitle: string) => {
         triggerToast("Downloading certificate...", "success");
         try {
-            const response = await axios.get(`${API_BASE_URL}/generate-pdf/${courseId}`, {
-                headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-                responseType: 'blob',
-            });
-
-            const url = window.URL.createObjectURL(new Blob([response.data]));
-            const link = document.createElement('a');
-            link.href = url;
-            link.setAttribute('download', `${courseTitle.replace(/\s+/g, '_')}_Certificate.pdf`);
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            window.URL.revokeObjectURL(url);
+            await downloadCertificatePdf(courseId, courseTitle);
         } catch (error) {
             console.error("Download error:", error);
             triggerToast("Failed to download certificate. Try again.", "error");
@@ -1095,10 +1191,10 @@ const StudentDashboard = () => {
     // ✅ LOADING SPINNER UI
     if (loading) {
         return (
-            <div className="flex h-screen items-center justify-center bg-[#E2E8F0]">
+            <div className="flex h-screen items-center justify-center">
                 <div className="flex flex-col items-center gap-4">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#005EB8]"></div>
-                    <p className="text-slate-600 font-bold animate-pulse">Loading Cloud Vaathi Dashboard...</p>
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+                    <p className="text-muted-foreground font-bold animate-pulse">Loading Cloud Vaathi Dashboard...</p>
                 </div>
             </div>
         );
@@ -1108,10 +1204,10 @@ const StudentDashboard = () => {
 
     // --- DASHBOARD UI ---
     return (
-        <div className="min-h-screen bg-[#F8FAFC] font-sans">
+        <div className="min-h-screen bg-transparent font-sans">
 
             {/* 1. HEADER BAR */}
-            <header className="bg-white border-b border-slate-200 px-4 lg:px-8 py-4 flex justify-between items-center sticky top-0 z-50 shadow-sm">
+            <header className="glass border-b border-border/50 px-4 lg:px-8 py-4 flex justify-between items-center sticky top-0 z-50">
 
                 {/* Left: Logo & Mobile Toggle */}
                 <div className="flex items-center gap-4">
@@ -1146,27 +1242,15 @@ const StudentDashboard = () => {
                         {unreadCount > 0 && <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>}
                     </button>
 
-                    {/* Profile Dropdown */}
-                    <div className="relative">
-                        <button onClick={() => setShowProfileMenu(!showProfileMenu)} className="w-9 h-9 lg:w-10 lg:h-10 rounded-full bg-[#005EB8] text-white flex items-center justify-center font-bold shadow-md hover:scale-105 transition-transform">
-                            <User size={18} className="lg:w-5 lg:h-5" />
-                        </button>
-
-                        {showProfileMenu && (
-                            <div className="absolute right-0 top-12 w-64 bg-white rounded-xl shadow-xl border border-slate-200 p-4 z-50 animate-fade-in">
-                                <div className="mb-3 border-b border-slate-100 pb-3">
-                                    <p className="font-bold text-slate-800 truncate">{studentProfile.name}</p>
-                                    <p className="text-xs text-slate-500 truncate">{studentProfile.email}</p>
-                                </div>
-                                <button onClick={() => { setActiveTab("settings"); setShowProfileMenu(false); }} className="flex items-center gap-3 w-full p-2 rounded-lg text-slate-600 hover:bg-slate-50 hover:text-[#005EB8] text-sm font-bold mb-1 transition-colors">
-                                    <Settings size={16} /> Settings
-                                </button>
-                                <button onClick={handleLogout} className="flex items-center gap-3 w-full p-2 rounded-lg text-red-500 hover:bg-red-50 text-sm font-bold transition-colors">
-                                    <LogOut size={16} /> Logout
-                                </button>
-                            </div>
-                        )}
-                    </div>
+                    <ProfileMenu
+                        name={studentProfile.name}
+                        email={studentProfile.email}
+                        onSettings={() => setActiveTab("settings")}
+                        onSignOut={handleLogout}
+                        signOutLabel="Logout"
+                    >
+                        <User size={18} className="lg:w-5 lg:h-5" />
+                    </ProfileMenu>
 
                     {/* Mobile Menu Toggle (Visible on small screens) */}
                     <button className="md:hidden p-2 text-slate-600" onClick={() => setCollapsed(!collapsed)}>
@@ -1257,7 +1341,7 @@ const StudentDashboard = () => {
                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="flex flex-col gap-8">
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <StatCard icon={BookOpen} label="Courses Enrolled" value={enrolledCourses.length} />
-                            <StatCard icon={Award} label="Certificates Earned" value={0} />
+                            <StatCard icon={Award} label="Certificates Earned" value={enrolledCourses.filter((course) => course.has_certificate).length} />
                             <StatCard icon={Trophy} label="Challenges Attended" value={codeTests.filter(t => t.completed).length} />
                         </div>
                         <div>
@@ -1268,21 +1352,21 @@ const StudentDashboard = () => {
                                         const prog = progressMap[course.id] || { percent: 0, completed: 0, total: 0 };
                                         return (
                                             <div key={course.id} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-6 items-center">
-                                                <div className="w-full md:w-1/3 h-32 bg-slate-100 rounded-xl overflow-hidden">
-                                                    {course.image_url ? <img src={course.image_url} className="w-full h-full object-cover" /> : <div className="flex items-center justify-center h-full text-slate-300"><BookOpen /></div>}
+                                                <div className="w-full md:w-1/3 h-32 bg-slate-100 rounded-xl overflow-hidden relative">
+                                                    {course.image_url ? <img src={resolveMediaUrl(course.image_url)} className="w-full h-full object-cover" /> : <div className="flex items-center justify-center h-full text-slate-300"><BookOpen /></div>}
+                                                    {!course.is_trial_expired && <CourseProgressRing percent={prog.percent} />}
                                                 </div>
                                                 <div className="flex-1 w-full">
                                                     <h4 className="font-bold text-lg text-slate-800 mb-2">{course.title}</h4>
-                                                    {/* ✅ USING ZAP HERE */}
-                                                    <div className="flex items-center gap-2 mb-2 text-xs font-bold text-[#005EB8] uppercase tracking-wide">
-                                                        <Zap size={14} className="text-yellow-500" fill="currentColor" /> In Progress
+                                                    <CourseProgressVisual progress={prog} />
+                                                    <div className="flex gap-2">
+                                                        <button onClick={() => navigate(`/course/${course.id}`)} className="flex-1 py-2 bg-white border border-slate-200 text-slate-700 rounded-lg font-bold text-sm hover:bg-slate-50 transition-colors flex items-center justify-center gap-2">
+                                                            <LayoutDashboard size={16} /> Dashboard
+                                                        </button>
+                                                        <button onClick={() => navigate(`/course/${course.id}/player`)} className="flex-1 py-2 bg-[#005EB8] text-white rounded-lg font-bold text-sm hover:bg-blue-700 transition-colors flex items-center justify-center gap-2">
+                                                            Resume <ChevronRight size={16} />
+                                                        </button>
                                                     </div>
-                                                    <div className="w-full bg-slate-100 rounded-full h-2 mb-2"><div className="bg-[#005EB8] h-2 rounded-full" style={{ width: `${prog.percent}%` }}></div></div>
-                                                    <div className="flex justify-between text-xs text-slate-500 font-bold mb-4"><span>{prog.percent}% Complete</span><span>{prog.completed}/{prog.total} Lessons</span></div>
-                                                    {/* ✅ USING CHEVRONRIGHT HERE */}
-                                                    <button onClick={() => navigate(`/course/${course.id}/player`)} className="w-full py-2 bg-[#005EB8] text-white rounded-lg font-bold text-sm hover:bg-blue-700 transition-colors flex items-center justify-center gap-2">
-                                                        Resume <ChevronRight size={16} />
-                                                    </button>
                                                 </div>
                                             </div>
                                         );
@@ -1334,6 +1418,7 @@ const StudentDashboard = () => {
                                         course={c}
                                         type="enrolled"
                                         navigate={navigate}
+                                        progress={progressMap[c.id]}
                                         handleDownloadSyllabus={handleDownloadSyllabus}
                                         onPayClick={(course: Course) => {
                                             // Reuse modal logic for payment
@@ -1350,8 +1435,57 @@ const StudentDashboard = () => {
 
                 {/* EXPLORE TAB */}
                 {activeTab === "explore" && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {availableCourses.map(c => <CourseCard key={c.id} course={c} type="available" handleFreeEnroll={handleFreeEnroll} openEnrollModal={openEnrollModal} />)}
+                    <div className="space-y-8">
+                        <div>
+                            <p className="text-slate-500 text-sm mb-4">Browse by category to find the right course faster.</p>
+                            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-thin">
+                                <button
+                                    onClick={() => setExploreCategory("all")}
+                                    className={`shrink-0 px-4 py-2 rounded-full text-sm font-bold border transition-all ${exploreCategory === "all"
+                                        ? "bg-[#005EB8] text-white border-[#005EB8] shadow-sm"
+                                        : "bg-white text-slate-600 border-slate-200 hover:border-[#005EB8] hover:text-[#005EB8]"
+                                        }`}
+                                >
+                                    All ({availableCourses.length})
+                                </button>
+                                {exploreGroups.map((group) => (
+                                    <button
+                                        key={group.id}
+                                        onClick={() => setExploreCategory(group.id)}
+                                        className={`shrink-0 px-4 py-2 rounded-full text-sm font-bold border transition-all ${exploreCategory === group.id
+                                            ? "bg-[#005EB8] text-white border-[#005EB8] shadow-sm"
+                                            : "bg-white text-slate-600 border-slate-200 hover:border-[#005EB8] hover:text-[#005EB8]"
+                                            }`}
+                                    >
+                                        {group.label} ({group.courses.length})
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {availableCourses.length === 0 ? (
+                            <div className="bg-white p-10 rounded-2xl border border-dashed border-slate-300 text-center text-slate-400">
+                                No courses available to explore yet.
+                            </div>
+                        ) : visibleExploreGroups.length === 0 ? (
+                            <div className="bg-white p-10 rounded-2xl border border-dashed border-slate-300 text-center text-slate-400">
+                                No courses in this category.
+                            </div>
+                        ) : (
+                            visibleExploreGroups.map((group) => (
+                                <section key={group.id}>
+                                    <div className="flex items-center justify-between mb-4">
+                                        <h3 className="text-lg font-extrabold text-slate-800">{group.label}</h3>
+                                        <span className="text-xs font-bold text-slate-400 uppercase tracking-wide">{group.courses.length} course{group.courses.length === 1 ? "" : "s"}</span>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                        {group.courses.map((c) => (
+                                            <CourseCard key={c.id} course={c} type="available" handleFreeEnroll={handleFreeEnroll} openEnrollModal={openEnrollModal} />
+                                        ))}
+                                    </div>
+                                </section>
+                            ))
+                        )}
                     </div>
                 )}
 
@@ -1387,6 +1521,16 @@ const StudentDashboard = () => {
                                         </div>
                                     </div>
 
+                                    <div className="flex items-center gap-1">
+                                    {course.certificate_id && (
+                                        <button
+                                            onClick={() => navigate(certificateVerifyPath(course.certificate_id!))}
+                                            className="p-2 rounded-lg text-[#005EB8] hover:bg-blue-50"
+                                            title="Verify certificate"
+                                        >
+                                            <ExternalLink size={18} />
+                                        </button>
+                                    )}
                                     <button
                                         onClick={() => course.has_certificate ? handleDownloadCertificate(course.id, course.title) : triggerToast("Complete the course first!", "error")}
                                         disabled={!course.has_certificate}
@@ -1395,6 +1539,7 @@ const StudentDashboard = () => {
                                     >
                                         <Download size={20} />
                                     </button>
+                                    </div>
                                 </div>
                             ))}
                         </div>
@@ -1429,7 +1574,7 @@ const StudentDashboard = () => {
 
                         <div className="p-6">
                             <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-6 flex items-center justify-between">
-                                <div><span className="block text-[10px] font-bold text-slate-400 uppercase">Price</span><span className="text-2xl font-extrabold text-[#005EB8]">₹{selectedCourse.price}</span></div>
+                                <div><span className="block text-[10px] font-bold text-slate-400 uppercase">Price</span><span className="text-2xl font-extrabold text-[#005EB8]">{formatStudentCourseAmount(selectedCourse.price) ?? "—"}</span></div>
                                 <div className="text-right"><span className="block text-[10px] font-bold text-slate-400 uppercase">Access</span><span className="text-sm font-bold text-slate-700">Lifetime</span></div>
                             </div>
 
@@ -1461,13 +1606,13 @@ const StudentDashboard = () => {
             {/* 🟢 PROFESSIONAL PASS KEY MODAL */}
             {showPassKeyModal !== null && (
                 <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(15, 23, 42, 0.6)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-                    <div style={{ background: "white", padding: "30px", borderRadius: "16px", width: "400px", boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)" }}>
+                    <div style={{ background: "var(--surface)", color: "var(--foreground)", padding: "30px", borderRadius: "16px", width: "400px", boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)", border: "1px solid var(--border)" }}>
                         <div className="flex justify-center mb-4"><div className="bg-blue-50 p-3 rounded-full"><Lock className="text-[#005EB8]" size={32} /></div></div>
                         <h3 style={{ margin: "0 0 10px 0", fontSize: "20px", fontWeight: "800", color: brand.textMain, textAlign: "center" }}>Enter Access Key</h3>
                         <p className="text-center text-slate-500 text-sm mb-2">This challenge is protected. Enter the pass key provided by your instructor.</p>
                         <p className="text-center text-slate-500 text-xs mb-6 leading-relaxed">When you start, your browser will ask for <strong>camera</strong> access first, then <strong>full screen</strong>, before the test opens. The camera turns off automatically when you finish or leave the test.</p>
                         <input type="text" placeholder="e.g. SECRET123" value={passKeyInput} onChange={(e) => setPassKeyInput(e.target.value)} className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-[#005EB8] text-center font-bold text-lg tracking-widest mb-6" />
-                        <div style={{ display: "flex", gap: "10px" }}><button onClick={() => setShowPassKeyModal(null)} style={{ flex: 1, padding: "12px", background: "transparent", border: `1px solid ${brand.border}`, borderRadius: "8px", fontWeight: "bold", color: brand.textLight, cursor: "pointer" }}>Cancel</button><button onClick={handleStartTest} style={{ flex: 1, padding: "12px", background: brand.cloudBlue, border: "none", borderRadius: "8px", fontWeight: "bold", color: "white", cursor: "pointer" }}>Start Test</button></div>
+                        <div style={{ display: "flex", gap: "10px" }}><button onClick={() => setShowPassKeyModal(null)} style={{ flex: 1, padding: "12px", background: "transparent", border: `1px solid ${brand.border}`, borderRadius: "8px", fontWeight: "bold", color: brand.textLight, cursor: "pointer" }}>Cancel</button><button onClick={handleStartTest} style={{ flex: 1, padding: "12px", background: "var(--gradient-neon)", border: "none", borderRadius: "8px", fontWeight: "bold", color: "#071018", cursor: "pointer" }}>Start Test</button></div>
                     </div>
                 </div>
             )}

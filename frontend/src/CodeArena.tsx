@@ -283,10 +283,10 @@ const CodeArena = () => {
             {/* ... (Header and List UI remains mostly the same) ... */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
                 <div>
-                    <h1 className="text-2xl md:text-3xl font-extrabold text-[#1e293b]">Code Arena</h1>
-                    <p className="text-sm md:text-base text-[#64748b]">Create and manage coding challenges.</p>
+                    <h1 className="text-2xl md:text-3xl font-extrabold">Code Arena</h1>
+                    <p className="text-sm md:text-base text-muted-foreground">Create and manage coding challenges.</p>
                 </div>
-                <button type="button" onClick={openCreateModal} className="w-full md:w-auto bg-[#005EB8] hover:bg-[#004a94] text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-200">
+                <button type="button" onClick={openCreateModal} className="cv-btn-primary w-full md:w-auto">
                     <Plus size={20} /> Create Challenge
                 </button>
             </div>

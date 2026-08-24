@@ -59,12 +59,12 @@ const AssignmentVerification = () => {
     }
   };
 
-  if (loading) return <div className="p-10 text-slate-500">Loading Dashboard...</div>;
+  if (loading) return <div className="p-6 text-muted-foreground">Loading dashboard...</div>;
 
   return (
-    <div className="p-8 bg-slate-50 min-h-screen font-sans relative">
-      <h1 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2">
-        <FolderOpen className="text-[#005EB8]" /> Assignment Verification
+    <div className="relative font-sans">
+      <h1 className="text-2xl font-bold mb-6 flex items-center gap-2">
+        <FolderOpen className="text-primary" /> Assignment Verification
       </h1>
 
       <div className="space-y-4">

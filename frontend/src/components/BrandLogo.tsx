@@ -1,44 +1,52 @@
 import React from "react";
 
 interface BrandLogoProps {
-    size?: "sm" | "md" | "lg" | "xl";
-    showTagline?: boolean;
-    className?: string;
-    imageOnly?: boolean;
+  size?: "sm" | "md" | "lg" | "xl";
+  showTagline?: boolean;
+  className?: string;
+  imageOnly?: boolean;
 }
 
-const BrandLogo: React.FC<BrandLogoProps> = ({ size = "md", showTagline = false, className = "", imageOnly = false }) => {
-    const [imageFailed, setImageFailed] = React.useState(false);
-    const sizeClasses = {
-        sm: "text-lg",
-        md: "text-2xl",
-        lg: "text-4xl",
-        xl: "text-6xl",
-    };
+const sizeMap = {
+  sm: { img: "h-10 w-10", title: "text-base", tag: "text-[10px]" },
+  md: { img: "h-10 w-10", title: "text-lg", tag: "text-[10px]" },
+  lg: { img: "h-12 w-12", title: "text-2xl", tag: "text-xs" },
+  xl: { img: "h-14 w-14", title: "text-3xl", tag: "text-sm" },
+};
 
-    return (
-        <div className={`flex flex-col items-start leading-none ${className}`}>
-            <img
-                src="/CloudVaathiLogo.png"
-                alt="Cloud Vaathi"
-                className="h-10 w-auto max-w-[260px] object-contain"
-                onError={() => setImageFailed(true)}
-            />
-            {(imageOnly && !imageFailed) ? null : (
-                <>
-            <div className={`font-extrabold tracking-tight ${sizeClasses[size]} flex items-center`}>
-                <span className="text-[#005EB8]">Cloud</span>
-                <span className="text-[#87C232] ml-1">Vaathi</span>
-            </div>
-            {showTagline && (
-                <span className={`text-[#87C232] font-semibold tracking-wider ${size === 'xl' ? 'text-xl mt-1' : 'text-[0.6rem] mt-0.5'}`}>
-                    Learn Better. Build Faster.
-                </span>
-            )}
-                </>
-            )}
+const BrandLogo: React.FC<BrandLogoProps> = ({
+  size = "md",
+  showTagline = false,
+  className = "",
+  imageOnly = false,
+}) => {
+  const [imageFailed, setImageFailed] = React.useState(false);
+  const s = sizeMap[size];
+
+  return (
+    <div className={`flex items-center gap-2.5 leading-none ${className}`}>
+      {!imageFailed && (
+        <img
+          src="/CloudVaathiLogo.png"
+          alt="Cloud Vaathi"
+          className={`${s.img} shrink-0 rounded-lg object-contain`}
+          onError={() => setImageFailed(true)}
+        />
+      )}
+      {!imageOnly && (
+        <div className="flex flex-col leading-none">
+          <span className={`font-display font-bold tracking-tight text-foreground ${s.title}`}>
+            Cloud Vaathi
+          </span>
+          {showTagline && (
+            <span className={`font-mono uppercase tracking-[0.18em] text-muted-foreground mt-1 ${s.tag}`}>
+              Learn - Certify - Transform
+            </span>
+          )}
         </div>
-    );
+      )}
+    </div>
+  );
 };
 
 export default BrandLogo;

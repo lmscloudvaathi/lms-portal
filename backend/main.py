@@ -9,13 +9,15 @@ from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any, Tuple
 import models
-from database import engine, get_db # Importing the Async engine and dependency
+from database import engine, get_db, AsyncSessionLocal, IS_SQLITE
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse, FileResponse
 import requests
 import io
 import json
 import os
+import uuid
 from pathlib import Path
 import smtplib
 import random
@@ -34,6 +36,7 @@ import email_otp
 from password_utils import verify_password, get_password_hash
 from signup_routes import router as signup_auth_router
 from student_google_auth import router as google_student_router
+from super_admin import is_super_admin_email, super_admin_emails
 from dotenv import load_dotenv
 # --- 📄 PDF GENERATION IMPORTS ---
 from reportlab.pdfgen import canvas
@@ -58,6 +61,8 @@ from googleapiclient.http import MediaIoBaseUpload
 from sqlalchemy import text
 from token_manager import TokenManager
 import code_runner
+import certificate_service
+from pdf_certificate import close_shared_browser
 
 # Load .env from this file's directory so GOOGLE_CLIENT_ID, DATABASE_URL, etc. work
 # even when uvicorn's cwd is not `backend/`.
@@ -73,10 +78,34 @@ import asyncio
 if sys.platform.startswith("win"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+async def _ensure_certificate_columns(conn):
+    statements = (
+        "ALTER TABLE user_certificates ADD COLUMN recipient_name VARCHAR(255)",
+        "ALTER TABLE user_certificates ADD COLUMN status VARCHAR(32)",
+        "ALTER TABLE user_certificates ADD COLUMN email_status VARCHAR(32)",
+        "ALTER TABLE user_certificates ADD COLUMN body_text TEXT",
+    )
+    mysql_statements = (
+        "ALTER TABLE user_certificates ADD COLUMN IF NOT EXISTS recipient_name VARCHAR(255);",
+        "ALTER TABLE user_certificates ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'PENDING';",
+        "ALTER TABLE user_certificates ADD COLUMN IF NOT EXISTS email_status VARCHAR(32) DEFAULT 'PENDING';",
+        "ALTER TABLE user_certificates ADD COLUMN IF NOT EXISTS body_text TEXT;",
+    )
+    for stmt in (statements if IS_SQLITE else mysql_statements):
+        try:
+            await conn.execute(text(stmt))
+        except Exception:
+            pass
+
+
 async def init_models():
     async with engine.begin() as conn:
         # 1. Create tables if they don't exist
         await conn.run_sync(models.Base.metadata.create_all)
+        await _ensure_certificate_columns(conn)
+        if IS_SQLITE:
+            print("Local SQLite database ready.")
+            return
         
         # 2. ✅ AUTO-MIGRATION: Update existing tables
         print("Checking for database migrations...")
@@ -91,16 +120,44 @@ async def init_models():
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMP;"))
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(255);"))
             await conn.execute(text("ALTER TABLE content_items ADD COLUMN IF NOT EXISTS resource_links TEXT;"))
+            await conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS category VARCHAR(64);"))
+            await _ensure_certificate_columns(conn)
+            try:
+                await conn.execute(text("ALTER TABLE courses ALTER COLUMN image_url TYPE TEXT;"))
+            except Exception:
+                await conn.execute(text("ALTER TABLE courses MODIFY image_url TEXT;"))
             
             print("Database migrations applied successfully.")
         except Exception as e:
             print(f"Migration note: {e}")
+
+
+async def _promote_super_admins():
+    try:
+        async with AsyncSessionLocal() as db:
+            for email in super_admin_emails():
+                result = await db.execute(
+                    select(models.User).where(func.lower(models.User.email) == email.lower())
+                )
+                user = result.scalars().first()
+                if user and user.role != "admin":
+                    user.role = "admin"
+                    user.is_active = True
+                    print(f"Promoted super admin: {email}")
+            await db.commit()
+    except Exception as e:
+        print(f"Super-admin promotion note: {e}")
             
             
 app = FastAPI(title="iQmath Pro - Military Grade API")
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+UPLOAD_ROOT = Path(__file__).resolve().parent / "uploads"
+THUMBNAIL_DIR = UPLOAD_ROOT / "thumbnails"
+THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_ROOT)), name="uploads")
 
 # Initialize Auto-Refresh Service
 token_manager = TokenManager()
@@ -109,11 +166,13 @@ token_manager = TokenManager()
 @app.on_event("startup")
 async def on_startup():
     await init_models()
+    await _promote_super_admins()
     token_manager.start()
 
 @app.on_event("shutdown")
 async def on_shutdown():
     token_manager.stop()
+    await close_shared_browser()
 
 # 2. CONFIG: CORS (explicit origins when using credentials; browsers reject credentials + "*")
 # CORS_ORIGINS in Render/Netlify is merged with defaults — env alone must not drop production domains.
@@ -261,6 +320,7 @@ class LiveSessionRequest(BaseModel):
 class CourseCreate(BaseModel):
     title: str; description: str; price: int; image_url: Optional[str] = None
     course_type: str = "standard"; language: Optional[str] = None
+    category: Optional[str] = None
 
 class CourseUpdate(BaseModel):
     title: Optional[str] = None
@@ -268,6 +328,7 @@ class CourseUpdate(BaseModel):
     price: Optional[int] = None
     image_url: Optional[str] = None
     language: Optional[str] = None
+    category: Optional[str] = None
     # If your DB has a duration column, add it here. If not, remove this line.
     # duration: Optional[str] = None
 
@@ -367,29 +428,80 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
     user = result.scalars().first()
     
     if user is None: raise HTTPException(status_code=401, detail="User not found")
+    if is_super_admin_email(user.email) and user.role != "admin":
+        user.role = "admin"
+        user.is_active = True
+        await db.commit()
+        await db.refresh(user)
     return user
 
 async def require_instructor(current_user: models.User = Depends(get_current_user)):
-    if current_user.role != "instructor":
+    if current_user.role not in ("instructor", "admin") and not is_super_admin_email(current_user.email):
         raise HTTPException(status_code=403, detail="⛔ Access Forbidden: Instructors Only")
     return current_user
 
 async def require_instructor_or_admin(current_user: models.User = Depends(get_current_user)):
-    if current_user.role not in ("instructor", "admin"):
+    if current_user.role not in ("instructor", "admin") and not is_super_admin_email(current_user.email):
         raise HTTPException(status_code=403, detail="⛔ Access Forbidden: Instructors and administrators only")
     return current_user
 
 
 def _can_manage_code_test(user: models.User, code_test: models.CodeTest) -> bool:
-    if user.role == "admin":
+    if user.role == "admin" or is_super_admin_email(user.email):
         return True
     return code_test.instructor_id == user.id
 
 
+def _can_manage_course(user: models.User, course: models.Course) -> bool:
+    # Staff may edit any course from the admin panel, including after publish.
+    if user.role in ("instructor", "admin") or is_super_admin_email(user.email):
+        return True
+    return course.instructor_id == user.id
+
+
 async def require_student(current_user: models.User = Depends(get_current_user)):
+    if is_super_admin_email(current_user.email) or current_user.role in ("instructor", "admin"):
+        raise HTTPException(status_code=403, detail="Use the admin portal for this account.")
     if current_user.role != "student":
         raise HTTPException(status_code=403, detail="⛔ Access Forbidden: Students Only")
     return current_user
+
+
+def _is_student(user: models.User) -> bool:
+    if is_super_admin_email(user.email):
+        return False
+    return user.role == "student"
+
+
+def _is_staff(user: models.User) -> bool:
+    return user.role in ("instructor", "admin") or is_super_admin_email(user.email)
+
+
+def serialize_module(module: models.Module) -> dict:
+    return {
+        "id": module.id,
+        "title": module.title,
+        "order": module.order,
+        "course_id": module.course_id,
+    }
+
+
+def serialize_course(course: models.Course, *, include_price: bool) -> dict:
+    """Course payload. Selling price is included only when explicitly allowed."""
+    data = {
+        "id": course.id,
+        "title": course.title,
+        "description": course.description,
+        "image_url": course.image_url,
+        "instructor_id": course.instructor_id,
+        "is_published": bool(course.is_published),
+        "course_type": course.course_type,
+        "language": course.language,
+        "category": getattr(course, "category", None),
+    }
+    if include_price:
+        data["price"] = int(course.price or 0)
+    return data
 
 def generate_random_password(length=8):
     characters = string.ascii_letters + string.digits + "!@#$"
@@ -587,18 +699,6 @@ def upload_file_to_drive(file_obj, filename, folder_link):
         print(f"Drive Error: {e}")
         return None
 
-def create_certificate_pdf(student_name: str, course_name: str, date_str: str):
-    buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=landscape(A4))
-    width, height = landscape(A4)
-    BRAND_BLUE = colors.Color(0/255, 94/255, 184/255)
-    c.setStrokeColor(BRAND_BLUE); c.setLineWidth(5); c.rect(20, 20, width-40, height-40)
-    c.setFont("Helvetica-Bold", 40); c.setFillColor(BRAND_BLUE); c.drawCentredString(width/2, height - 180, "CERTIFICATE")
-    c.setFont("Helvetica", 16); c.setFillColor(colors.black); c.drawCentredString(width/2, height - 210, "OF COMPLETION")
-    c.setFont("Helvetica-BoldOblique", 32); c.drawCentredString(width/2, height - 310, student_name)
-    c.setFont("Helvetica-Bold", 24); c.setFillColor(BRAND_BLUE); c.drawCentredString(width/2, height - 400, course_name)
-    c.showPage(); c.save(); buffer.seek(0); return buffer
-
 # --- 🔄 ASYNC LOGIC HELPERS ---
 # --- 🔄 UPDATED LOGIC: Strict 100% Completion Check ---
 async def check_progress_status(user_id: int, course_id: int, db: AsyncSession):
@@ -636,25 +736,6 @@ async def check_progress_status(user_id: int, course_id: int, db: AsyncSession):
     
     return completed_count, total_items, is_fully_completed
 
-async def generate_certificate_record(user_id: int, course_id: int, db: AsyncSession):
-    # Check if cert already exists
-    cert_check = await db.execute(select(models.UserCertificate).where(
-        models.UserCertificate.user_id == user_id, 
-        models.UserCertificate.course_id == course_id
-    ))
-    if cert_check.scalars().first():
-        return True # Already exists
-
-    # Create new cert
-    import uuid
-    new_cert = models.UserCertificate(
-        user_id=user_id, 
-        course_id=course_id, 
-        certificate_id=str(uuid.uuid4())[:8].upper()
-    )
-    db.add(new_cert)
-    await db.commit()
-    return True
 # --- 🚀 ASYNC API ENDPOINTS ---
 
 @app.post("/api/v1/users", status_code=201)
@@ -665,11 +746,12 @@ async def create_user(user: UserCreate, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Email already registered")
     
     # 2. Create User
+    assigned_role = "admin" if is_super_admin_email(user.email) else user.role
     new_user = models.User(
         email=user.email, 
         hashed_password=get_password_hash(user.password), 
         full_name=user.name, 
-        role=user.role,
+        role=assigned_role,
         phone_number=user.phone_number
     )
     db.add(new_user)
@@ -713,7 +795,9 @@ async def create_user(user: UserCreate, db: AsyncSession = Depends(get_db)):
 
 @app.post("/api/v1/login", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(models.User).where(models.User.email == form_data.username))
+    result = await db.execute(
+        select(models.User).where(func.lower(models.User.email) == form_data.username.strip().lower())
+    )
     user = result.scalars().first()
     
     if not user or not verify_password(form_data.password, user.hashed_password):
@@ -722,9 +806,13 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
     # ✅ CHECK 2: Is the User Active? (Soft Delete Check)
     if user.is_active is False:  # explicitly check for False
         raise HTTPException(status_code=403, detail="Account deactivated. Contact support.")
-    
-    
-    
+
+    if is_super_admin_email(user.email) and user.role != "admin":
+        user.role = "admin"
+        user.is_active = True
+        await db.commit()
+        await db.refresh(user)
+
     token = create_access_token(data={"sub": user.email, "role": user.role})
     return {"access_token": token, "token_type": "bearer", "role": user.role}
 @app.post("/api/v1/admin/admit-student")
@@ -855,11 +943,12 @@ async def create_code_test(test: CodeTestCreate, db: AsyncSession = Depends(get_
     return {"message": "Test Created Successfully!"}
 
 @app.get("/api/v1/courses/{course_id}")
-async def get_course_details(course_id: int, db: AsyncSession = Depends(get_db)):
+async def get_course_details(course_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     result = await db.execute(select(models.Course).where(models.Course.id == course_id))
     course = result.scalars().first()
     if not course: raise HTTPException(status_code=404, detail="Course not found")
-    return course
+    # Students see the fee after login; staff see it for course editing.
+    return serialize_course(course, include_price=_is_student(current_user) or _is_staff(current_user))
 
 @app.get("/api/v1/code-tests")
 async def get_code_tests(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -1198,14 +1287,32 @@ async def execute_code(
 
 @app.get("/api/v1/courses")
 async def get_courses(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    if current_user.role == "instructor":
-        res = await db.execute(select(models.Course).where(models.Course.instructor_id == current_user.id))
-        return res.scalars().all()
-    if current_user.role == "admin":
+    if _is_staff(current_user):
+        # Admin panel lists every course so staff can edit drafts and published ones.
         res = await db.execute(select(models.Course).order_by(models.Course.id.desc()))
-        return res.scalars().all()
-    res = await db.execute(select(models.Course).where(models.Course.is_published == True))
-    return res.scalars().all()
+        courses = res.scalars().all()
+    else:
+        res = await db.execute(select(models.Course).where(models.Course.is_published == True))
+        courses = res.scalars().all()
+    # Price for students (catalog) and staff (editing).
+    include_price = _is_student(current_user) or _is_staff(current_user)
+    return [serialize_course(course, include_price=include_price) for course in courses]
+
+@app.post("/api/v1/uploads/thumbnail")
+async def upload_course_thumbnail(
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(require_instructor),
+):
+    content_type = (file.content_type or "").lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Please upload an image file.")
+    data = await file.read()
+    if len(data) > 6 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image must be 6MB or smaller.")
+    filename = f"{uuid.uuid4().hex}.jpg"
+    dest = THUMBNAIL_DIR / filename
+    dest.write_bytes(data)
+    return {"url": f"/uploads/thumbnails/{filename}"}
 
 @app.post("/api/v1/courses")
 # 👇 CHANGE: Remove "schemas." prefix to use the local class
@@ -1217,7 +1324,8 @@ async def create_course(course: CourseCreate, db: AsyncSession = Depends(get_db)
         image_url=course.image_url, 
         instructor_id=current_user.id, 
         course_type=course.course_type, 
-        language=course.language
+        language=course.language,
+        category=course.category,
     )
     db.add(new_course)
     await db.commit()
@@ -1230,11 +1338,27 @@ async def create_course(course: CourseCreate, db: AsyncSession = Depends(get_db)
 
 @app.post("/api/v1/courses/{course_id}/modules")
 async def create_module(course_id: int, module: ModuleCreate, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
-    new_module = models.Module(**module.dict(), course_id=course_id)
+    course_res = await db.execute(select(models.Course).where(models.Course.id == course_id))
+    course = course_res.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if not _can_manage_course(current_user, course):
+        raise HTTPException(status_code=403, detail="Not authorized to add modules to this course")
+
+    payload = module.model_dump() if hasattr(module, "model_dump") else module.dict()
+    title = str(payload.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Module title is required")
+
+    new_module = models.Module(
+        title=title,
+        order=int(payload.get("order") or 0),
+        course_id=course_id,
+    )
     db.add(new_module)
     await db.commit()
     await db.refresh(new_module)
-    return new_module
+    return serialize_module(new_module)
 
 @app.put("/api/v1/courses/{course_id}/modules/reorder")
 async def reorder_modules(course_id: int, req: ReorderModulesRequest, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
@@ -1242,7 +1366,7 @@ async def reorder_modules(course_id: int, req: ReorderModulesRequest, db: AsyncS
     res = await db.execute(select(models.Course).where(models.Course.id == course_id))
     course = res.scalars().first()
     if not course: raise HTTPException(status_code=404, detail="Course not found")
-    if course.instructor_id != current_user.id: raise HTTPException(status_code=403, detail="Not authorized")
+    if course.instructor_id != current_user.id and not _can_manage_course(current_user, course): raise HTTPException(status_code=403, detail="Not authorized")
 
     # 2. Fetch all modules for this course
     result = await db.execute(select(models.Module).where(models.Module.course_id == course_id))
@@ -1259,8 +1383,12 @@ async def reorder_modules(course_id: int, req: ReorderModulesRequest, db: AsyncS
 
 @app.get("/api/v1/courses/{course_id}/modules")
 async def get_modules(course_id: int, db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(models.Module).where(models.Module.course_id == course_id).order_by(models.Module.order))
-    return res.scalars().all()
+    res = await db.execute(
+        select(models.Module)
+        .where(models.Module.course_id == course_id)
+        .order_by(models.Module.order, models.Module.id)
+    )
+    return [serialize_module(m) for m in res.scalars().all()]
 
 @app.post("/api/v1/content")
 async def add_content(content: ContentCreate, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
@@ -1410,7 +1538,7 @@ async def add_items_from_library(
         raise HTTPException(status_code=404, detail="Target module not found")
 
     target_module, target_course = target_pair
-    if target_course.instructor_id != current_user.id:
+    if not _can_manage_course(current_user, target_course):
         raise HTTPException(status_code=403, detail="You can add library items only to your own course module")
 
     item_ids = [item_id for item_id in payload.item_ids if isinstance(item_id, int)]
@@ -1464,7 +1592,7 @@ async def import_modules_from_library(
     target_course = target_course_res.scalars().first()
     if not target_course:
         raise HTTPException(status_code=404, detail="Target course not found")
-    if target_course.instructor_id != current_user.id:
+    if not _can_manage_course(current_user, target_course):
         raise HTTPException(status_code=403, detail="You can import modules only into your own course")
 
     module_ids = [module_id for module_id in payload.module_ids if isinstance(module_id, int)]
@@ -1540,22 +1668,35 @@ async def update_course_details(
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
     
-    # 2. Verify Ownership
-    if course.instructor_id != current_user.id:
+    # 2. Verify Ownership (published courses remain editable in admin panel)
+    if not _can_manage_course(current_user, course):
         raise HTTPException(status_code=403, detail="Not authorized to edit this course")
 
-    # 3. Update Fields if provided
-    if update.title: course.title = update.title
-    if update.description: course.description = update.description
-    if update.price is not None: course.price = update.price
-    if update.image_url: course.image_url = update.image_url
-    if update.language: course.language = update.language
+    # 3. Update fields if provided (works for draft and published courses)
+    if update.title is not None:
+        title = update.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Course title is required")
+        course.title = title
+    if update.description is not None:
+        course.description = update.description
+    if update.price is not None:
+        course.price = update.price
+    if update.image_url is not None:
+        course.image_url = update.image_url or None
+    if update.language is not None:
+        course.language = update.language or None
+    if update.category is not None:
+        course.category = update.category or None
     
     # 4. Save
     await db.commit()
     await db.refresh(course)
     
-    return {"message": "Course updated successfully", "course": course}
+    return {
+        "message": "Course updated successfully",
+        "course": serialize_course(course, include_price=True),
+    }
 
 @app.get("/api/v1/courses/{course_id}/player")
 async def get_course_player(course_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -1572,7 +1713,7 @@ async def get_course_player(course_id: int, db: AsyncSession = Depends(get_db), 
     enrol_res = await db.execute(select(models.Enrollment).where(models.Enrollment.user_id == current_user.id, models.Enrollment.course_id == course_id))
     enrollment = enrol_res.scalars().first()
     
-    if not enrollment and current_user.role != "instructor": raise HTTPException(status_code=403)
+    if not enrollment and not _is_staff(current_user): raise HTTPException(status_code=403)
     if enrollment and enrollment.enrollment_type == "trial" and enrollment.expiry_date and datetime.utcnow() > enrollment.expiry_date:
         raise HTTPException(status_code=402, detail="Trial Expired")
 
@@ -1582,7 +1723,7 @@ async def get_course_player(course_id: int, db: AsyncSession = Depends(get_db), 
     progress_map = {p.content_item_id: p for p in progress_records}
     completed_ids = {p.content_item_id for p in progress_records if p.is_completed}
 
-    return {
+    payload = {
         "id": course.id, 
         "title": course.title, 
         "course_type": course.course_type,
@@ -1630,6 +1771,312 @@ async def get_course_player(course_id: int, db: AsyncSession = Depends(get_db), 
             )
         ]
     }
+    cert = await certificate_service.get_user_certificate(db, current_user.id, course_id)
+    payload["has_certificate"] = bool(cert)
+    payload["certificate_id"] = cert.certificate_id if cert else None
+    if cert:
+        payload["certificate"] = certificate_service.serialize_certificate(cert, course.title)
+    if _is_student(current_user):
+        payload["price"] = int(course.price or 0)
+    return payload
+
+
+def _progress_type_bucket(item_type: Optional[str]) -> str:
+    kind = (item_type or "lesson").lower()
+    if kind in ("video", "live_class"):
+        return "videos"
+    if kind == "note":
+        return "notes"
+    if kind == "quiz":
+        return "quizzes"
+    if kind == "assignment":
+        return "assignments"
+    if kind in ("code_test", "code"):
+        return "code_tests"
+    if kind == "live_test":
+        return "live_tests"
+    return "lessons"
+
+
+@app.get("/api/v1/courses/{course_id}/progress-dashboard")
+async def get_course_progress_dashboard(
+    course_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Per-course progress dashboard for the signed-in student (or staff preview)."""
+    result = await db.execute(
+        select(models.Course)
+        .options(selectinload(models.Course.modules).selectinload(models.Module.items))
+        .where(models.Course.id == course_id)
+    )
+    course = result.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    enrol_res = await db.execute(
+        select(models.Enrollment).where(
+            models.Enrollment.user_id == current_user.id,
+            models.Enrollment.course_id == course_id,
+        )
+    )
+    enrollment = enrol_res.scalars().first()
+    if not enrollment and not _is_staff(current_user):
+        raise HTTPException(status_code=403, detail="Enroll in this course to view progress")
+
+    days_left = 0
+    is_trial_expired = False
+    enrollment_type = enrollment.enrollment_type if enrollment else "staff"
+    enrolled_at = enrollment.enrolled_at.isoformat() if enrollment and enrollment.enrolled_at else None
+    if enrollment and enrollment.enrollment_type == "trial" and enrollment.expiry_date:
+        delta = enrollment.expiry_date - datetime.utcnow()
+        days_left = max(0, delta.days)
+        is_trial_expired = delta.total_seconds() <= 0
+
+    instructor_name = None
+    if course.instructor_id:
+        instr_res = await db.execute(select(models.User).where(models.User.id == course.instructor_id))
+        instructor = instr_res.scalars().first()
+        instructor_name = instructor.full_name if instructor else None
+
+    modules_sorted = sorted(
+        course.modules or [],
+        key=lambda module: (
+            module.order is None,
+            module.order if module.order is not None else 10**9,
+            module.id,
+        ),
+    )
+    all_items = []
+    for module in modules_sorted:
+        items = sorted(
+            module.items or [],
+            key=lambda item: (
+                item.order is None,
+                item.order if item.order is not None else 10**9,
+                item.id,
+            ),
+        )
+        all_items.extend(items)
+
+    item_ids = [item.id for item in all_items]
+    progress_map = {}
+    if item_ids:
+        prog_res = await db.execute(
+            select(models.LessonProgress).where(
+                models.LessonProgress.user_id == current_user.id,
+                models.LessonProgress.content_item_id.in_(item_ids),
+            )
+        )
+        progress_map = {p.content_item_id: p for p in prog_res.scalars().all()}
+
+    submission_map = {}
+    assignment_ids = [item.id for item in all_items if (item.type or "").lower() == "assignment"]
+    if assignment_ids:
+        sub_res = await db.execute(
+            select(models.Submission).where(
+                models.Submission.user_id == current_user.id,
+                models.Submission.content_item_id.in_(assignment_ids),
+            )
+        )
+        for sub in sub_res.scalars().all():
+            existing = submission_map.get(sub.content_item_id)
+            if not existing or (sub.submitted_at and existing.get("submitted_at") and sub.submitted_at > existing["submitted_at"]):
+                submission_map[sub.content_item_id] = {
+                    "status": sub.status,
+                    "submitted_at": sub.submitted_at,
+                }
+
+    completed_ids = {cid for cid, rec in progress_map.items() if rec.is_completed}
+    total_items = len(all_items)
+    completed_count = len([item for item in all_items if item.id in completed_ids])
+    percent = 0 if total_items == 0 else round((completed_count / total_items) * 100)
+
+    type_stats: Dict[str, Dict[str, int]] = {}
+    remaining_minutes = 0
+    next_lesson = None
+    recent_activity = []
+
+    for item in all_items:
+        bucket = _progress_type_bucket(item.type)
+        stats = type_stats.setdefault(bucket, {"completed": 0, "total": 0})
+        stats["total"] += 1
+        done = item.id in completed_ids
+        if done:
+            stats["completed"] += 1
+            rec = progress_map.get(item.id)
+            if rec and rec.completed_at:
+                recent_activity.append({
+                    "id": item.id,
+                    "title": item.title,
+                    "type": item.type,
+                    "completed_at": rec.completed_at.isoformat(),
+                })
+        else:
+            remaining_minutes += int(item.duration or 0)
+            if next_lesson is None:
+                next_lesson = {
+                    "id": item.id,
+                    "title": item.title,
+                    "type": item.type,
+                    "duration": item.duration,
+                }
+
+    modules_payload = []
+    for module in modules_sorted:
+        lessons_sorted = sorted(
+            module.items or [],
+            key=lambda item: (
+                item.order is None,
+                item.order if item.order is not None else 10**9,
+                item.id,
+            ),
+        )
+        lesson_rows = []
+        for item in lessons_sorted:
+            rec = progress_map.get(item.id)
+            sub = submission_map.get(item.id)
+            is_done = item.id in completed_ids
+            lesson_rows.append({
+                "id": item.id,
+                "title": item.title,
+                "type": item.type,
+                "duration": item.duration,
+                "is_mandatory": bool(item.is_mandatory),
+                "is_completed": is_done,
+                "completed_at": rec.completed_at.isoformat() if rec and rec.completed_at and is_done else None,
+                "assignment_status": sub["status"] if sub else None,
+            })
+            if next_lesson and next_lesson.get("id") == item.id:
+                next_lesson["module_id"] = module.id
+                next_lesson["module_title"] = module.title
+        module_total = len(lesson_rows)
+        module_done = sum(1 for row in lesson_rows if row["is_completed"])
+        modules_payload.append({
+            "id": module.id,
+            "title": module.title,
+            "order": module.order,
+            "completed": module_done,
+            "total": module_total,
+            "percent": 0 if module_total == 0 else round((module_done / module_total) * 100),
+            "lessons": lesson_rows,
+        })
+
+    challenges_payload = None
+    next_challenge = None
+    chal_res = await db.execute(select(models.CourseChallenge).where(models.CourseChallenge.course_id == course_id))
+    challenges = chal_res.scalars().all()
+    if challenges:
+        chal_ids = [c.id for c in challenges]
+        solved_res = await db.execute(
+            select(models.ChallengeProgress).where(
+                models.ChallengeProgress.user_id == current_user.id,
+                models.ChallengeProgress.challenge_id.in_(chal_ids),
+            )
+        )
+        solved_map = {p.challenge_id: p for p in solved_res.scalars().all() if p.is_solved}
+        difficulty_order = ["Easy", "Medium", "Hard"]
+        by_difficulty: Dict[str, Dict[str, Any]] = {}
+        challenge_rows = []
+        for challenge in challenges:
+            solved = challenge.id in solved_map
+            rec = solved_map.get(challenge.id)
+            row = {
+                "id": challenge.id,
+                "title": challenge.title,
+                "difficulty": challenge.difficulty or "Easy",
+                "is_solved": solved,
+                "solved_at": rec.solved_at.isoformat() if rec and rec.solved_at else None,
+            }
+            challenge_rows.append(row)
+            bucket = by_difficulty.setdefault(row["difficulty"], {"solved": 0, "total": 0, "items": []})
+            bucket["total"] += 1
+            if solved:
+                bucket["solved"] += 1
+            bucket["items"].append(row)
+        for level in difficulty_order:
+            by_difficulty.setdefault(level, {"solved": 0, "total": 0, "items": []})
+        for row in sorted(
+            challenge_rows,
+            key=lambda r: (difficulty_order.index(r["difficulty"]) if r["difficulty"] in difficulty_order else 99, r["id"]),
+        ):
+            if not row["is_solved"] and next_challenge is None:
+                next_challenge = row
+                break
+        challenges_payload = {
+            "solved": len(solved_map),
+            "total": len(challenges),
+            "percent": 0 if not challenges else round((len(solved_map) / len(challenges)) * 100),
+            "by_difficulty": by_difficulty,
+        }
+
+    cert_res = await db.execute(
+        select(models.UserCertificate).where(
+            models.UserCertificate.user_id == current_user.id,
+            models.UserCertificate.course_id == course_id,
+        )
+    )
+    certificate = cert_res.scalars().first()
+
+    if course.course_type == "coding" and challenges_payload:
+        is_complete = challenges_payload["total"] > 0 and challenges_payload["solved"] == challenges_payload["total"]
+        overall_completed = challenges_payload["solved"]
+        overall_total = challenges_payload["total"]
+        overall_percent = challenges_payload["percent"]
+    else:
+        is_complete = total_items > 0 and completed_count == total_items
+        overall_completed = completed_count
+        overall_total = total_items
+        overall_percent = percent
+
+    recent_activity.sort(key=lambda row: row.get("completed_at") or "", reverse=True)
+
+    payload = {
+        "course": {
+            "id": course.id,
+            "title": course.title,
+            "description": course.description,
+            "image_url": course.image_url,
+            "course_type": course.course_type,
+            "language": course.language,
+            "category": getattr(course, "category", None),
+            "instructor_name": instructor_name,
+        },
+        "enrollment": {
+            "enrollment_type": enrollment_type,
+            "enrolled_at": enrolled_at,
+            "days_left": days_left,
+            "is_trial_expired": is_trial_expired,
+        },
+        "progress": {
+            "completed": overall_completed,
+            "total": overall_total,
+            "percent": overall_percent,
+            "is_complete": is_complete,
+            "remaining_minutes": remaining_minutes,
+            "modules_completed": sum(1 for m in modules_payload if m["total"] > 0 and m["completed"] == m["total"]),
+            "modules_total": len(modules_payload),
+        },
+        "by_type": type_stats,
+        "modules": modules_payload,
+        "challenges": challenges_payload,
+        "next_lesson": next_lesson,
+        "next_challenge": next_challenge,
+        "recent_activity": recent_activity[:6],
+        "certificate": {
+            "eligible": is_complete,
+            "claimed": bool(certificate),
+            "issued_at": certificate.issued_at.isoformat() if certificate and certificate.issued_at else None,
+            "credential_id": certificate.certificate_id if certificate else None,
+            "verify_url": certificate_service.verify_url(certificate.certificate_id) if certificate and certificate.certificate_id else None,
+            "recipient_name": certificate.recipient_name if certificate else None,
+            "status": certificate.status if certificate else None,
+        },
+    }
+    if _is_student(current_user):
+        payload["course"]["price"] = int(course.price or 0)
+    return payload
+
 
 @app.post("/api/v1/enroll/{course_id}")
 async def enroll_student(course_id: int, req: EnrollmentRequest, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -1647,27 +2094,36 @@ async def enroll_student(course_id: int, req: EnrollmentRequest, db: AsyncSessio
 
 @app.get("/api/v1/generate-pdf/{course_id}")
 async def generate_pdf_endpoint(course_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    # 1. ✅ SECURITY CHECK: Verify if the certificate record exists in DB
-    # This ensures they have passed the "100% completion" check in the claim endpoint first.
     cert_res = await db.execute(select(models.UserCertificate).where(
-        models.UserCertificate.user_id == current_user.id, 
+        models.UserCertificate.user_id == current_user.id,
         models.UserCertificate.course_id == course_id
     ))
     certificate = cert_res.scalars().first()
 
     if not certificate:
-        raise HTTPException(status_code=403, detail="Certificate not yet earned. Please complete the course and click 'Claim Certificate' first.")
+        raise HTTPException(status_code=403, detail="Certificate not yet earned. Complete the course to receive it automatically.")
 
-    # 2. Fetch Course Details
-    res = await db.execute(select(models.Course).where(models.Course.id == course_id))
-    course = res.scalars().first()
-    
-    # 3. Generate PDF
-    # We use the date they actually earned it (certificate.issued_at) rather than current time
-    formatted_date = certificate.issued_at.strftime("%B %d, %Y")
-    
-    pdf = await asyncio.to_thread(create_certificate_pdf, current_user.full_name, course.title, formatted_date)
-    return StreamingResponse(pdf, media_type="application/pdf")
+    course_res = await db.execute(select(models.Course).where(models.Course.id == course_id))
+    course = course_res.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    try:
+        pdf_path = await certificate_service.ensure_certificate_pdf(db, certificate, current_user, course)
+    except Exception as exc:
+        print(f"Certificate PDF error: {exc}")
+        raise HTTPException(status_code=500, detail="Could not generate the certificate PDF. Please try again.")
+
+    filename = f"{(course.title or 'certificate').replace(' ', '_')}_{certificate.certificate_id}.pdf"
+    return FileResponse(path=str(pdf_path), media_type="application/pdf", filename=filename)
+
+
+@app.get("/api/v1/certificates/verify/{credential_id}")
+async def verify_certificate_public(credential_id: str, db: AsyncSession = Depends(get_db)):
+    payload = await certificate_service.public_certificate_payload(db, credential_id.strip())
+    if not payload:
+        raise HTTPException(status_code=404, detail="This certificate ID was not found.")
+    return payload
 
 @app.get("/api/v1/my-courses")
 async def get_my_courses(db: AsyncSession = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -1681,10 +2137,10 @@ async def get_my_courses(db: AsyncSession = Depends(get_db), current_user: model
     
     # 2. Fetch earned certificates for ribbon logic
     cert_res = await db.execute(
-        select(models.UserCertificate.course_id)
+        select(models.UserCertificate)
         .where(models.UserCertificate.user_id == current_user.id)
     )
-    earned_cert_ids = set(cert_res.scalars().all())
+    earned_certs = {c.course_id: c for c in cert_res.scalars().all()}
 
     # 3. Build response with enrollment status
     valid_courses = []
@@ -1704,17 +2160,21 @@ async def get_my_courses(db: AsyncSession = Depends(get_db), current_user: model
                 "id": e.course.id,
                 "title": e.course.title,
                 "description": e.course.description,
-                "price": e.course.price,
                 "image_url": e.course.image_url,
                 "instructor_id": e.course.instructor_id,
                 "course_type": e.course.course_type,
+                "language": e.course.language,
+                "category": getattr(e.course, "category", None),
 
                 # UI Status Fields
                 "enrollment_type": e.enrollment_type, # "paid" or "trial"
                 "days_left": days_left,
                 "is_trial_expired": is_trial_expired,
-                "has_certificate": e.course.id in earned_cert_ids
+                "has_certificate": e.course.id in earned_certs,
+                "certificate_id": earned_certs[e.course.id].certificate_id if e.course.id in earned_certs else None,
             }
+            if _is_student(current_user):
+                course_data["price"] = int(e.course.price or 0)
             valid_courses.append(course_data)
 
     return valid_courses
@@ -1947,7 +2407,7 @@ async def instructor_dashboard_stats(
 ):
     """Revenue from paid enrollments only (not per registered user)."""
     course_scope = []
-    if current_user.role == "instructor":
+    if current_user.role == "instructor" and not is_super_admin_email(current_user.email):
         course_scope.append(models.Course.instructor_id == current_user.id)
 
     revenue_query = (
@@ -2134,16 +2594,16 @@ async def get_assignment_dashboard(db: AsyncSession = Depends(get_db), current_u
     # ⚡ OPTIMIZED DASHBOARD QUERY
     # Fetch Courses + Modules + Items(Assignment) + Submissions + Student
     # This prevents the 10,000 query crash loop.
-    result = await db.execute(
+    query = (
         select(models.Course)
         .options(
             selectinload(models.Course.modules)
             .selectinload(models.Module.items)
-           # Assuming relationship back to submission exists? 
-            # Actually better to just load course structure and then fetch submissions in batch
         )
-        .where(models.Course.instructor_id == current_user.id)
     )
+    if current_user.role == "instructor" and not is_super_admin_email(current_user.email):
+        query = query.where(models.Course.instructor_id == current_user.id)
+    result = await db.execute(query)
     courses = result.scalars().all()
     
     # Batch fetch all students
@@ -2220,8 +2680,12 @@ async def verify_assignment(submission_id: int, db: AsyncSession = Depends(get_d
         progress.is_completed = True
         
     await db.commit()
+
+    student_res = await db.execute(select(models.User).where(models.User.id == sub.user_id))
+    student = student_res.scalars().first()
+    if student:
+        await certificate_service.issue_after_content_complete(db, student, sub.content_item_id)
     
-    # ✅ Removed certificate logic.
     return {"message": "Verified"}
 
 # 1. Toggle Item Completion (The Green Tick)
@@ -2243,7 +2707,11 @@ async def mark_item_complete(item_id: int, db: AsyncSession = Depends(get_db), c
         progress.is_completed = True
         
     await db.commit()
-    return {"message": "Marked as complete", "status": "success"}
+    cert = await certificate_service.issue_after_content_complete(db, current_user, item_id)
+    payload = {"message": "Marked as complete", "status": "success", "certificate_issued": bool(cert)}
+    if cert:
+        payload["certificate"] = certificate_service.serialize_certificate(cert)
+    return payload
 
 
 # 2. Final Course Completion (The "Complete Course" Button)
@@ -2283,8 +2751,17 @@ async def claim_course_certificate(course_id: int, db: AsyncSession = Depends(ge
 
     # --- GENERATE CERTIFICATE ---
     if is_eligible:
-        await generate_certificate_record(current_user.id, course_id, db)
-        return {"status": "success", "message": "Certificate Generated!", "certificate_ready": True}
+        cert = await certificate_service.issue_certificate_if_eligible(
+            db, current_user, course_id, generate_pdf=True, send_email=True, require_complete=True
+        )
+        if not cert:
+            return {"status": "error", "message": "Could not issue certificate."}
+        return {
+            "status": "success",
+            "message": "Certificate Generated!",
+            "certificate_ready": True,
+            "certificate": certificate_service.serialize_certificate(cert, course.title),
+        }
     
     return {"status": "error", "message": "Requirements not met."}
 
@@ -2554,7 +3031,11 @@ async def mark_challenge_solved(challenge_id: int, db: AsyncSession = Depends(ge
         print(f"Error saving progress: {e}")
         pass
 
-    return {"status": "success", "message": "Challenge marked as solved"}
+    cert = await certificate_service.issue_after_challenge_solved(db, current_user, challenge_id)
+    payload = {"status": "success", "message": "Challenge marked as solved", "certificate_issued": bool(cert)}
+    if cert:
+        payload["certificate"] = certificate_service.serialize_certificate(cert)
+    return payload
 
 @app.patch("/api/v1/challenges/{challenge_id}")
 async def update_challenge(challenge_id: int, update: ChallengeUpdate, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor_or_admin)):

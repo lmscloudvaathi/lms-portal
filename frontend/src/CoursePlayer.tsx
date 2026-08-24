@@ -1,18 +1,20 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import axios from "axios";
 import Editor from "@monaco-editor/react";
 import Plyr from "plyr-react";
 import "plyr/dist/plyr.css";
 import API_BASE_URL from './config';
 import { runTestCasesLocally } from './utils/pyodideEnv';
+import { CODE_TEMPLATES } from './utils/codeTemplates';
+import { downloadCertificatePdf } from './utils/certificates';
+import ThumbnailPicker from "./components/ThumbnailPicker";
 import {
     PlayCircle, FileText, ChevronLeft, Menu, Code, HelpCircle,
     UploadCloud, Play, Save, Monitor, Cpu, ChevronDown, ChevronRight, CreditCard,
     File as FileIcon, X, CheckCircle, Radio, Lock, ArrowLeft, AlertCircle, Clock,
-    Zap, CheckSquare, Square, CheckCheck, Award, Edit, AlertTriangle, Maximize, Minimize, LockKeyhole, Cloud, Flag, Link as ResourceLinkIcon // <--- Added 'Cloud' icon here
+    Zap, CheckSquare, Square, CheckCheck, Award, Edit, AlertTriangle, Maximize, Minimize, LockKeyhole, Cloud, Flag, Link as ResourceLinkIcon, LayoutDashboard
 } from "lucide-react";
-import { CODE_TEMPLATES } from './utils/codeTemplates';
 
 
 
@@ -234,8 +236,12 @@ const CodeCompiler = ({ lesson, contentItemId, onLessonComplete }: { lesson: any
         setFinishing(true);
         try {
             const token = localStorage.getItem("token");
-            await axios.post(`${API_BASE_URL}/content/${contentItemId}/complete`, {}, { headers: { Authorization: `Bearer ${token}` } });
-            triggerToast("Lesson finished and marked complete!", "success");
+            const completeRes = await axios.post(`${API_BASE_URL}/content/${contentItemId}/complete`, {}, { headers: { Authorization: `Bearer ${token}` } });
+            if (completeRes.data?.certificate_issued) {
+                triggerToast("Course complete — certificate issued!", "success");
+            } else {
+                triggerToast("Lesson finished and marked complete!", "success");
+            }
             onLessonComplete?.();
         } catch (e: any) {
             triggerToast(e?.response?.data?.detail || "Could not mark lesson complete.", "error");
@@ -411,16 +417,27 @@ const CodingPlayer = ({ course, token }: { course: any, token: string }) => {
         return true;
     };
 
+    const [certificateReady, setCertificateReady] = useState(Boolean(course?.has_certificate));
+
+    useEffect(() => {
+        setCertificateReady(Boolean(course?.has_certificate));
+    }, [course?.has_certificate]);
+
     const handleClaimCertificate = async () => {
         try {
+            if (certificateReady) {
+                await downloadCertificatePdf(Number(courseId), course?.title || "certificate");
+                triggerToast("Certificate downloaded.", "success");
+                return;
+            }
             const res = await axios.post(`${API_BASE_URL}/courses/${courseId}/claim-certificate`, {}, { headers: { Authorization: `Bearer ${token}` } });
             if (res.data.status === "success") {
-                triggerToast("🎉 Certificate Generated!", "success");
-                setTimeout(() => navigate("/student-dashboard"), 2000);
+                setCertificateReady(true);
+                triggerToast("Certificate issued!", "success");
             } else {
                 triggerToast(res.data.message, "error");
             }
-        } catch (e) { triggerToast("Failed to claim certificate", "error"); }
+        } catch (e) { triggerToast("Failed to get certificate", "error"); }
     };
 
     // 🟢 HANDLE RUN CODE (Dry Run)
@@ -546,11 +563,15 @@ const CodingPlayer = ({ course, token }: { course: any, token: string }) => {
                 triggerToast("Problem Solved!", "success");
 
                 // 1. Mark Solved in Backend
-                await axios.post(`${API_BASE_URL}/challenges/${selectedProblem.id}/solve`, {}, { headers: { Authorization: `Bearer ${token}` } });
+                const solveRes = await axios.post(`${API_BASE_URL}/challenges/${selectedProblem.id}/solve`, {}, { headers: { Authorization: `Bearer ${token}` } });
 
                 // 2. Update Local State
                 const updated = challenges.map(c => c.id === selectedProblem.id ? { ...c, is_solved: true } : c);
                 setChallenges(updated);
+                if (solveRes.data?.certificate_issued) {
+                    setCertificateReady(true);
+                    triggerToast("Course complete — certificate issued!", "success");
+                }
             } else {
                 const fail = report.results?.find((r: any) => r.status !== "Passed");
                 if (fail) setOutput(`❌ TEST FAILED (Case ${fail.id + 1})\n\nInput: ${fail.input}\nExpected: ${fail.expected}\nActual: ${fail.actual}`);
@@ -651,12 +672,15 @@ const CodingPlayer = ({ course, token }: { course: any, token: string }) => {
             <div className="max-w-6xl mx-auto">
                 <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 lg:mb-10 gap-4">
                     <div className="flex items-center gap-4">
-                        <button onClick={() => navigate("/student-dashboard")} className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-500"><ChevronLeft size={20} /></button>
+                        <button onClick={() => navigate(`/course/${courseId}`)} className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-500"><ChevronLeft size={20} /></button>
                         <div>
                             <h1 className="text-2xl lg:text-3xl font-extrabold text-slate-900 m-0">{course.title}</h1>
                             <p className="text-slate-500 text-sm mt-1">Language: <span className="font-bold text-[#005EB8] uppercase">{course.language}</span></p>
                         </div>
                     </div>
+                    <button onClick={() => navigate(`/course/${courseId}`)} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 font-bold text-sm hover:bg-slate-50">
+                        <LayoutDashboard size={16} /> Progress dashboard
+                    </button>
                 </div>
 
                 {/* --- 🟢 STAGE TABS WITH DOUBLE TICK LOGIC --- */}
@@ -719,9 +743,13 @@ const CodingPlayer = ({ course, token }: { course: any, token: string }) => {
                             <Award size={32} className="text-white" />
                         </div>
                         <h2 className="text-3xl font-extrabold mb-2">Course Completed!</h2>
-                        <p className="mb-6 opacity-90">You have successfully mastered all levels. Claim your certificate now.</p>
+                        <p className="mb-6 opacity-90">
+                            {certificateReady
+                                ? "Your certificate of completion is ready."
+                                : "You have successfully mastered all levels. Your certificate is ready to issue."}
+                        </p>
                         <button onClick={handleClaimCertificate} className="bg-white text-green-700 px-8 py-3 rounded-xl font-bold hover:scale-105 transition-transform shadow-lg">
-                            Claim Certificate
+                            {certificateReady ? "Download Certificate" : "Get Certificate"}
                         </button>
                     </div>
                 )}
@@ -1149,6 +1177,8 @@ const LiveTestProctor = ({ lesson }: { lesson: any }) => {
 const CoursePlayer = () => {
     const { courseId } = useParams();
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+    const requestedLessonId = Number(searchParams.get("lesson") || 0);
     const [course, setCourse] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [activeLesson, setActiveLesson] = useState<any>(null);
@@ -1188,7 +1218,7 @@ const CoursePlayer = () => {
     const getErrorMessage = (err: any, fallback: string) =>
         err?.response?.data?.detail || err?.response?.data?.message || err?.message || fallback;
 
-    const brand = { blue: "#005EB8", green: "#87C232", textMain: "#0f172a", textLight: "#64748b" };
+    const brand = { blue: "var(--neon-cyan)", green: "var(--neon-cyan)", textMain: "var(--foreground)", textLight: "var(--muted-foreground)" };
     const RAZORPAY_PAYLINK_URL = import.meta.env.VITE_RAZORPAY_PAYLINK_URL;
 
     const handlePayment = async () => {
@@ -1259,9 +1289,20 @@ const CoursePlayer = () => {
                 const res = await axios.get(`${API_BASE_URL}/courses/${courseId}/player`, { headers: { Authorization: `Bearer ${token}` } });
                 setCourse(res.data);
 
-                if (res.data.modules?.[0] && !activeLesson) {
-                    setExpandedModules([res.data.modules[0].id]);
-                    if (res.data.modules[0].lessons?.length > 0) setActiveLesson(res.data.modules[0].lessons[0]);
+                const modules = res.data.modules || [];
+                if (modules.length && !activeLesson) {
+                    const allLessons = modules.flatMap((module: any) =>
+                        (module.lessons || []).map((lesson: any) => ({ ...lesson, moduleId: module.id }))
+                    );
+                    const requested = requestedLessonId
+                        ? allLessons.find((lesson: any) => lesson.id === requestedLessonId)
+                        : null;
+                    const nextIncomplete = allLessons.find((lesson: any) => !lesson.is_completed);
+                    const chosen = requested || nextIncomplete || allLessons[0];
+                    if (chosen) {
+                        setExpandedModules([chosen.moduleId || modules[0].id]);
+                        setActiveLesson(chosen);
+                    }
                 }
             } catch (err: any) {
                 console.error(err);
@@ -1282,7 +1323,7 @@ const CoursePlayer = () => {
             } finally { setLoading(false); }
         };
         fetchCourse();
-    }, [courseId, refreshTrigger]);
+    }, [courseId, refreshTrigger, requestedLessonId]);
 
     useEffect(() => {
         if (activeLesson) {
@@ -1357,8 +1398,12 @@ const CoursePlayer = () => {
     const handleToggleComplete = async (lesson: any) => {
         try {
             const token = localStorage.getItem("token");
-            await axios.post(`${API_BASE_URL}/content/${lesson.id}/complete`, {}, { headers: { Authorization: `Bearer ${token}` } });
-            triggerToast(lesson.is_completed ? "Marked as Incomplete" : "Marked as Complete!", "success");
+            const res = await axios.post(`${API_BASE_URL}/content/${lesson.id}/complete`, {}, { headers: { Authorization: `Bearer ${token}` } });
+            if (res.data?.certificate_issued) {
+                triggerToast("Course complete — certificate issued!", "success");
+            } else {
+                triggerToast(lesson.is_completed ? "Marked as Incomplete" : "Marked as Complete!", "success");
+            }
             setRefreshTrigger(prev => prev + 1);
         } catch (err) { triggerToast("Failed to update status", "error"); }
     };
@@ -1366,17 +1411,29 @@ const CoursePlayer = () => {
     const handleClaimCertificate = async () => {
         try {
             const token = localStorage.getItem("token");
+            if (course?.has_certificate) {
+                await downloadCertificatePdf(Number(courseId), course?.title || "certificate");
+                triggerToast("Certificate downloaded.", "success");
+                return;
+            }
             const res = await axios.post(`${API_BASE_URL}/courses/${courseId}/claim-certificate`, {}, { headers: { Authorization: `Bearer ${token}` } });
             if (res.data.status === "success") {
-                triggerToast("🎉 Certificate Generated Successfully!", "success");
-                setTimeout(() => navigate("/student-dashboard"), 2000);
+                triggerToast("Certificate issued!", "success");
+                setRefreshTrigger(prev => prev + 1);
             } else { triggerToast(res.data.message || "Course not yet complete.", "error"); }
-        } catch (err) { triggerToast("Failed to claim certificate.", "error"); }
+        } catch (err) { triggerToast("Failed to get certificate.", "error"); }
     };
 
     const isCourseFullyComplete = useMemo(() => {
         if (!course) return false;
         return course.modules.every((m: any) => m.lessons.every((l: any) => l.is_completed));
+    }, [course]);
+
+    const courseProgress = useMemo(() => {
+        const lessons = (course?.modules || []).flatMap((module: any) => module.lessons || []);
+        const completed = lessons.filter((lesson: any) => lesson.is_completed).length;
+        const total = lessons.length;
+        return { completed, total, percent: total ? Math.round((completed / total) * 100) : 0 };
     }, [course]);
 
     const renderContent = () => {
@@ -1493,8 +1550,9 @@ const CoursePlayer = () => {
     // ✅ 3. PAYWALL VIEW: Renders if trial is expired
     if (isTrialExpired) {
         // Use the fetched details, or fallbacks if loading failed
-        const displayPrice = expiredCourseDetails?.price || 599;
-        const originalPrice = Math.round(displayPrice * 1.5); // Fake "original" price for effect
+        const realPrice = Number(course?.price ?? expiredCourseDetails?.price);
+        const hasStudentPrice = localStorage.getItem("role") === "student" && Number.isFinite(realPrice) && realPrice >= 0;
+        const displayPrice = hasStudentPrice ? realPrice : null;
 
         return (
             <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 relative overflow-hidden font-sans">
@@ -1520,9 +1578,8 @@ const CoursePlayer = () => {
 
                     <div className="bg-slate-50 rounded-xl p-4 mb-6 border border-slate-100">
                         <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">Total Price</p>
-                        {/* ✅ DYNAMIC PRICE */}
                         <p className="text-3xl font-extrabold text-slate-900">
-                            ₹{displayPrice} <span className="text-lg font-medium text-slate-400 line-through">₹{originalPrice}</span>
+                            {displayPrice === null ? "Sign in as a student to view the fee" : displayPrice === 0 ? "Free" : `₹${displayPrice}`}
                         </p>
                     </div>
 
@@ -1546,7 +1603,7 @@ const CoursePlayer = () => {
         );
     }
 
-    if (loading) return <div>Loading...</div>;
+    if (loading) return <div className="min-h-screen flex items-center justify-center text-foreground font-semibold">Loading...</div>;
     if (course?.course_type === "coding") return <CodingPlayer course={course} token={localStorage.getItem("token") || ""} />;
 
     return (
@@ -1557,12 +1614,13 @@ const CoursePlayer = () => {
             <div className="flex-1 flex flex-col h-full relative z-0">
                 <header className="h-16 bg-white border-b border-slate-200 flex items-center px-4 lg:px-6 justify-between z-10 shrink-0">
                     <div className="flex items-center gap-4">
-                        <button onClick={() => navigate("/student-dashboard")} className="bg-none border-none cursor-pointer text-slate-500 flex items-center gap-2 font-semibold hover:text-slate-800 text-xs lg:text-sm"><ChevronLeft size={20} /> <span className="hidden sm:inline">Dashboard</span></button>
+                        <button onClick={() => navigate(`/course/${courseId}`)} className="bg-none border-none cursor-pointer text-slate-500 flex items-center gap-2 font-semibold hover:text-slate-800 text-xs lg:text-sm"><ChevronLeft size={20} /> <span className="hidden sm:inline">Progress</span></button>
                         <div className="h-6 w-px bg-slate-200 hidden sm:block"></div>
                         <h1 className="text-sm lg:text-base font-bold text-slate-900 m-0 max-w-[200px] lg:max-w-[400px] truncate">{course?.title || activeLesson?.title || "Course Player"}</h1>
                     </div>
                     <div className="flex items-center gap-2 lg:gap-4">
-                        {localStorage.getItem("role") === "instructor" && (<button onClick={handleEditClick} className="hidden lg:flex items-center gap-2 bg-slate-100 text-slate-700 px-3 py-2 rounded-lg font-bold border border-slate-200 hover:bg-slate-200 transition-colors text-sm"><Edit size={16} /> Edit Course</button>)}
+                        <button onClick={() => navigate(`/course/${courseId}`)} className="hidden sm:flex items-center gap-2 bg-slate-100 text-slate-700 px-3 py-2 rounded-lg font-bold border border-slate-200 hover:bg-slate-200 transition-colors text-xs lg:text-sm"><LayoutDashboard size={16} /> Dashboard</button>
+                        {(localStorage.getItem("role") === "instructor" || localStorage.getItem("role") === "admin") && (<button onClick={handleEditClick} className="hidden lg:flex items-center gap-2 bg-slate-100 text-slate-700 px-3 py-2 rounded-lg font-bold border border-slate-200 hover:bg-slate-200 transition-colors text-sm"><Edit size={16} /> Edit Course</button>)}
                         <button onClick={handlePayment} className="hidden sm:flex items-center gap-2 bg-[#87C232] text-white px-4 py-2 rounded-lg font-bold border-none cursor-pointer hover:bg-[#76a82b] transition-colors text-xs lg:text-sm"><CreditCard size={18} /> Buy Lifetime Access</button>
                         <button onClick={() => setSidebarOpen(!sidebarOpen)} className="bg-none border-none cursor-pointer p-2 hover:bg-slate-100 rounded-lg"><Menu color={brand.textMain} size={24} /></button>
                     </div>
@@ -1579,6 +1637,16 @@ const CoursePlayer = () => {
                         <button onClick={() => setSidebarOpen(false)} className="lg:hidden text-slate-500 hover:text-slate-800">
                             <X size={24} />
                         </button>
+                    </div>
+                    <div className="px-4 lg:px-6 pb-4 border-b border-slate-100">
+                        <div className="flex items-center justify-between text-xs font-bold text-slate-500 mb-1.5">
+                            <span>Your progress</span>
+                            <span className="text-slate-800 tabular-nums">{courseProgress.percent}%</span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                            <div className="h-full rounded-full bg-[#005EB8] transition-all" style={{ width: `${courseProgress.percent}%` }} />
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-1.5">{courseProgress.completed} of {courseProgress.total} lessons complete</p>
                     </div>
 
                     <div className="flex-1 overflow-y-auto p-0">
@@ -1634,7 +1702,7 @@ const CoursePlayer = () => {
                             className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${isCourseFullyComplete ? "bg-[#005EB8] text-white shadow-lg shadow-blue-200 hover:scale-105 cursor-pointer" : "bg-slate-200 text-slate-400 cursor-not-allowed"}`}
                         >
                             <Award size={20} />
-                            {isCourseFullyComplete ? "Claim Certificate" : "Complete All Modules"}
+                            {isCourseFullyComplete ? (course?.has_certificate ? "Download Certificate" : "Get Certificate") : "Complete All Modules"}
                         </button>
                     </div>
                 </aside>
@@ -1708,13 +1776,8 @@ const CoursePlayer = () => {
 
                             {/* Thumbnail */}
                             <div>
-                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Thumbnail URL</label>
-                                <input
-                                    type="text"
-                                    value={editForm.image_url}
-                                    onChange={e => setEditForm({ ...editForm, image_url: e.target.value })}
-                                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-600 focus:outline-none focus:ring-2 focus:ring-[#005EB8]"
-                                />
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Course thumbnail</label>
+                                <ThumbnailPicker value={editForm.image_url} onChange={(image_url) => setEditForm({ ...editForm, image_url })} />
                             </div>
                         </div>
 

@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import axios from "axios";
-import API_BASE_URL from './config';
+import API_BASE_URL from "./config";
+import { COURSE_CATEGORY_OPTIONS } from "./utils/courseCategories";
+import ThumbnailPicker from "./components/ThumbnailPicker";
 import {
     Plus, ArrowLeft, Video, HelpCircle, Zap, FileText,
     Edit3, Layout, X, Link, Clock, Radio, BookOpen, Search, ChevronDown,
@@ -106,7 +108,7 @@ const CourseBuilder = () => {
 
     const [isEditingCourse, setIsEditingCourse] = useState(false);
     const [editCourseForm, setEditCourseForm] = useState({
-        title: "", description: "", price: 0, image_url: "", language: ""
+        title: "", description: "", price: 0, image_url: "", language: "", category: "general"
     });
 
     // Open the modal and fill it with existing data
@@ -117,7 +119,8 @@ const CourseBuilder = () => {
             description: courseDetails.description || "",
             price: courseDetails.price || 0,
             image_url: courseDetails.image_url || "",
-            language: courseDetails.language || ""
+            language: courseDetails.language || "",
+            category: courseDetails.category || "general"
         });
         setIsEditingCourse(true);
     };
@@ -143,8 +146,8 @@ const CourseBuilder = () => {
     };
 
     const brand = {
-        blue: "#005EB8", green: "#87C232", bg: "#E2E8F0",
-        cardBg: "#F8FAFC", border: "#cbd5e1", textMain: "#1e293b", textLight: "#64748b"
+        blue: "var(--neon-cyan)", green: "var(--neon-cyan)", bg: "transparent",
+        cardBg: "var(--surface)", border: "var(--border)", textMain: "var(--foreground)", textLight: "var(--muted-foreground)"
     };
 
     const triggerToast = (message: string, type: "success" | "error" = "success") => {
@@ -387,13 +390,27 @@ const CourseBuilder = () => {
     };
 
     const handleAddModule = async () => {
-        if (!newModuleTitle.trim()) return;
+        const title = newModuleTitle.trim();
+        if (!title) {
+            triggerToast("Enter a module name first", "error");
+            return;
+        }
         try {
             const token = localStorage.getItem("token");
-            await axios.post(`${API_BASE_URL}/courses/${courseId}/modules`, { title: newModuleTitle, order: modules.length + 1 }, { headers: { Authorization: `Bearer ${token}` } });
-            setNewModuleTitle(""); setShowAddModule(false); fetchModules();
+            const nextOrder = modules.reduce((max, module) => Math.max(max, Number(module.order) || 0), 0) + 1;
+            await axios.post(
+                `${API_BASE_URL}/courses/${courseId}/modules`,
+                { title, order: nextOrder },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            setNewModuleTitle("");
+            setShowAddModule(false);
+            await fetchModules();
             triggerToast("Module added successfully!", "success");
-        } catch (err) { triggerToast("Error adding module", "error"); }
+        } catch (err: any) {
+            const detail = err?.response?.data?.detail;
+            triggerToast(typeof detail === "string" ? detail : "Error adding module", "error");
+        }
     };
 
     const handlePublish = async () => {
@@ -882,11 +899,16 @@ const CourseBuilder = () => {
                                     </div>
                                 </div>
                                 <div>
-                                    <label style={labelStyle}>Thumbnail URL</label>
-                                    <div style={{ position: "relative" }}>
-                                        <Link size={18} style={{ position: "absolute", left: "14px", top: "14px", color: brand.textLight }} />
-                                        <input value={editCourseForm.image_url} onChange={(e) => setEditCourseForm({ ...editCourseForm, image_url: e.target.value })} style={{ ...inputStyle, paddingLeft: "45px" }} />
-                                    </div>
+                                    <label style={labelStyle}>Category</label>
+                                    <select value={editCourseForm.category} onChange={(e) => setEditCourseForm({ ...editCourseForm, category: e.target.value })} style={inputStyle}>
+                                        {COURSE_CATEGORY_OPTIONS.map((option) => (
+                                            <option key={option.id} value={option.id}>{option.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Course thumbnail</label>
+                                    <ThumbnailPicker value={editCourseForm.image_url} onChange={(image_url) => setEditCourseForm({ ...editCourseForm, image_url })} />
                                 </div>
                             </div>
                             <button onClick={handleSaveCourseDetails} style={saveButton}>Save Changes</button>
@@ -959,7 +981,7 @@ const CourseBuilder = () => {
             </header>
 
             {/* Content Area: Fills remaining height, sidebar and main sit side-by-side */}
-            < div className="grid grid-cols-1 lg:grid-cols-[350px_1fr] gap-10 p-5 lg:p-10 flex-1 overflow-hidden" >
+            <div className="grid grid-cols-1 lg:grid-cols-[350px_1fr] gap-10 p-5 lg:p-10 flex-1 min-h-0 overflow-visible lg:overflow-hidden" >
                 {/* SIDEBAR: Scrolls internally */}
                 < aside style={{
                     background: brand.cardBg,
@@ -1000,15 +1022,24 @@ const CourseBuilder = () => {
                             </div>
                         ))}
                         {showAddModule ? (
-                            <div style={{ marginTop: "10px", padding: "15px", background: "#f1f5f9", borderRadius: "12px" }}>
-                                <input autoFocus placeholder="Module Name..." value={newModuleTitle} onChange={(e) => setNewModuleTitle(e.target.value)} style={{ width: "100%", padding: "10px", borderRadius: "8px", border: `1px solid ${brand.border}`, marginBottom: "10px", outline: "none" }} />
+                            <div style={{ marginTop: "10px", padding: "15px", background: "#f1f5f9", borderRadius: "12px", position: "sticky", bottom: 0 }}>
+                                <input
+                                    autoFocus
+                                    placeholder="Module Name..."
+                                    value={newModuleTitle}
+                                    onChange={(e) => setNewModuleTitle(e.target.value)}
+                                    onKeyDown={(e) => { if (e.key === "Enter") handleAddModule(); }}
+                                    style={{ width: "100%", padding: "10px", borderRadius: "8px", border: `1px solid ${brand.border}`, marginBottom: "10px", outline: "none" }}
+                                />
                                 <div style={{ display: "flex", gap: "8px" }}>
-                                    <button onClick={handleAddModule} style={{ flex: 1, background: brand.blue, color: "white", border: "none", padding: "10px", borderRadius: "8px", fontWeight: "700" }}>Add</button>
-                                    <button onClick={() => setShowAddModule(false)} style={{ flex: 1, background: "white", border: `1px solid ${brand.border}`, padding: "10px", borderRadius: "8px" }}>Cancel</button>
+                                    <button type="button" onClick={handleAddModule} style={{ flex: 1, background: brand.blue, color: "white", border: "none", padding: "10px", borderRadius: "8px", fontWeight: "700", cursor: "pointer" }}>Add</button>
+                                    <button type="button" onClick={() => setShowAddModule(false)} style={{ flex: 1, background: "white", border: `1px solid ${brand.border}`, padding: "10px", borderRadius: "8px", cursor: "pointer" }}>Cancel</button>
                                 </div>
                             </div>
                         ) : (
-                            <button onClick={() => setShowAddModule(true)} style={{ width: "100%", padding: "14px", borderRadius: "12px", border: `2px dashed ${brand.border}`, color: brand.textLight, background: "none", fontWeight: "700", cursor: "pointer", marginTop: "10px" }}>+ Add Module</button>
+                            <button type="button" onClick={() => setShowAddModule(true)} style={{ width: "100%", padding: "14px", borderRadius: "12px", border: `2px dashed ${brand.border}`, color: brand.textLight, background: "none", fontWeight: "700", cursor: "pointer", marginTop: "10px", position: "sticky", bottom: 0 }}>
+                                + Add Module
+                            </button>
                         )}
                     </div>
                 </aside >
@@ -1683,17 +1714,23 @@ const CourseBuilder = () => {
                                     </div>
                                 </div>
 
+                                <div>
+                                    <label style={labelStyle}>Category</label>
+                                    <select
+                                        value={editCourseForm.category}
+                                        onChange={(e) => setEditCourseForm({ ...editCourseForm, category: e.target.value })}
+                                        style={inputStyle}
+                                    >
+                                        {COURSE_CATEGORY_OPTIONS.map((option) => (
+                                            <option key={option.id} value={option.id}>{option.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
                                 {/* Thumbnail */}
                                 <div>
-                                    <label style={labelStyle}>Thumbnail URL</label>
-                                    <div style={{ position: "relative" }}>
-                                        <Link size={18} style={{ position: "absolute", left: "14px", top: "14px", color: brand.textLight }} />
-                                        <input
-                                            value={editCourseForm.image_url}
-                                            onChange={(e) => setEditCourseForm({ ...editCourseForm, image_url: e.target.value })}
-                                            style={{ ...inputStyle, paddingLeft: "45px" }}
-                                        />
-                                    </div>
+                                    <label style={labelStyle}>Course thumbnail</label>
+                                    <ThumbnailPicker value={editCourseForm.image_url} onChange={(image_url) => setEditCourseForm({ ...editCourseForm, image_url })} />
                                 </div>
                             </div>
 
@@ -1707,13 +1744,13 @@ const CourseBuilder = () => {
     );
 };
 
-const selectorCard = { display: "flex", alignItems: "center", gap: "20px", padding: "24px", background: "white", borderRadius: "16px", border: "1.5px solid #cbd5e1", cursor: "pointer", transition: "all 0.2s ease", boxShadow: "0 2px 4px rgba(0,0,0,0.02)" };
-const cardTitle = { fontSize: "16px", fontWeight: "800", color: "#1e293b", marginBottom: "4px" };
-const cardDesc = { fontSize: "12px", color: "#64748b" };
+const selectorCard = { display: "flex", alignItems: "center", gap: "20px", padding: "24px", background: "var(--surface)", borderRadius: "16px", border: "1.5px solid var(--border)", cursor: "pointer", transition: "all 0.2s ease", boxShadow: "0 2px 4px rgba(0,0,0,0.02)" };
+const cardTitle = { fontSize: "16px", fontWeight: "800", color: "var(--foreground)", marginBottom: "4px" };
+const cardDesc = { fontSize: "12px", color: "var(--muted-foreground)" };
 const modalOverlay = { position: "fixed" as const, top: 0, left: 0, right: 0, bottom: 0, background: "rgba(15, 23, 42, 0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: "20px" };
-const modalContent = { background: "#F8FAFC", width: "100%", maxWidth: "600px", padding: "40px", borderRadius: "24px", boxShadow: "0 25px 50px -12px rgba(0,0,0,0.5)" };
-const labelStyle = { display: "block", marginBottom: "8px", fontSize: "12px", fontWeight: "800", color: "#1e293b", textTransform: "uppercase" as const, letterSpacing: "0.5px" };
-const inputStyle = { width: "100%", padding: "14px", borderRadius: "12px", border: "1.5px solid #cbd5e1", fontSize: "15px", outline: "none", boxSizing: "border-box" as const, background: "white" };
-const saveButton = { width: "100%", padding: "16px", marginTop: "32px", background: "#005EB8", color: "white", border: "none", borderRadius: "14px", fontSize: "16px", fontWeight: "800", cursor: "pointer", boxShadow: "0 10px 15px -3px rgba(0, 94, 184, 0.3)" };
+const modalContent = { background: "var(--surface)", width: "100%", maxWidth: "600px", maxHeight: "86vh", overflowY: "auto" as const, padding: "24px", borderRadius: "20px", boxShadow: "0 25px 50px -12px rgba(0,0,0,0.5)", color: "var(--foreground)", border: "1px solid var(--border)" };
+const labelStyle = { display: "block", marginBottom: "8px", fontSize: "12px", fontWeight: "800", color: "var(--foreground)", textTransform: "uppercase" as const, letterSpacing: "0.5px" };
+const inputStyle = { width: "100%", padding: "12px 14px", borderRadius: "12px", border: "1.5px solid color-mix(in oklab, var(--neon-cyan) 28%, var(--border))", fontSize: "15px", outline: "none", boxSizing: "border-box" as const, background: "var(--input)", color: "var(--foreground)", fontWeight: 600 };
+const saveButton = { width: "100%", padding: "16px", marginTop: "32px", background: "var(--gradient-neon)", color: "#071018", border: "none", borderRadius: "14px", fontSize: "16px", fontWeight: "800", cursor: "pointer", boxShadow: "0 10px 15px -3px oklch(86% 0.17 200 / 0.3)" };
 
 export default CourseBuilder;

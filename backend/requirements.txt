@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 sqlalchemy
+aiosqlite
 asyncpg
 asyncmy
 aiomysql
@@ -14,6 +15,7 @@ python-multipart
 google-generativeai
 razorpay
 reportlab
+playwright
 pandas
 openpyxl
 python-dotenv
