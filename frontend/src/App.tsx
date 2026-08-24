@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { GoogleOAuthProvider } from "@react-oauth/google";
 import axios from "axios";
-import { FileText, PlusCircle, BookOpen, Trash2, CheckCircle, X, AlertTriangle, Pencil, Image as ImageIcon } from "lucide-react";
+import { FileText, PlusCircle, BookOpen, Trash2, X, Pencil, Image as ImageIcon } from "lucide-react";
 import API_BASE_URL, { GOOGLE_CLIENT_ID, resolveMediaUrl } from './config';
 import AdminLogin from "./AdminLogin";
 import Login from "./Login";
@@ -25,6 +25,8 @@ import CodingCourseManager from "./CodingCourseManager";
 import { clearSession, getValidSession } from "./utils/session";
 import ThemeBackdrop from "./components/ThemeBackdrop";
 import ThumbnailPicker from "./components/ThumbnailPicker";
+import Modal from "./components/Modal";
+import CvToast from "./components/CvToast";
 import { COURSE_CATEGORY_OPTIONS } from "./utils/courseCategories";
 
 type AdminCourse = {
@@ -234,8 +236,8 @@ const CourseList = () => {
         </div> 
       )}
 
-      {editingCourse && (
-        <div className="cv-modal-overlay" onClick={() => !saving && setEditingCourse(null)}>
+      <Modal open={!!editingCourse} onClose={() => !saving && setEditingCourse(null)} closeOnBackdrop={!saving}>
+          {editingCourse && (
           <div className="cv-modal max-w-3xl" onClick={(e) => e.stopPropagation()}>
             <div className="cv-modal-header flex items-start justify-between gap-3">
               <div>
@@ -330,31 +332,15 @@ const CourseList = () => {
               </button>
             </div>
           </div>
-        </div>
-      )}
+          )}
+      </Modal>
 
-      {/* ✅ TOAST NOTIFICATION COMPONENT */}
-      {toast.show && (
-        <div style={{ 
-            position: "fixed", top: "20px", right: "20px", 
-            background: "white", padding: "16px 24px", borderRadius: "12px", 
-            boxShadow: "0 10px 30px -5px rgba(0,0,0,0.15)", 
-            borderLeft: `6px solid ${toast.type === "success" ? "#87C232" : "#ef4444"}`,
-            display: "flex", alignItems: "center", gap: "12px", zIndex: 9999,
-            animation: "slideIn 0.3s ease-out"
-        }}>
-            {toast.type === "success" ? <CheckCircle size={24} color="#87C232" /> : <AlertTriangle size={24} color="#ef4444" />}
-            <div>
-                <h4 style={{ margin: "0", fontSize: "14px", fontWeight: "700", color: "#1e293b" }}>
-                    {toast.type === "success" ? "Success" : "Error"}
-                </h4>
-                <p style={{ margin: 0, fontSize: "13px", color: "#64748b" }}>{toast.message}</p>
-            </div>
-            <button onClick={() => setToast(prev => ({ ...prev, show: false }))} style={{ background: "none", border: "none", cursor: "pointer", marginLeft: "10px", color: "#94a3b8" }}>
-                <X size={16} />
-            </button>
-        </div>
-      )}
+      <CvToast
+        show={toast.show}
+        type={toast.type}
+        message={toast.message}
+        onClose={() => setToast((prev) => ({ ...prev, show: false }))}
+      />
     </div>
   );
 };

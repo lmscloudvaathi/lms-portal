@@ -4,8 +4,10 @@ import axios from "axios";
 import API_BASE_URL from './config';
 import { 
   ArrowLeft, Trash2, Edit, Code, Plus, 
-  X, CheckCircle, AlertTriangle 
+  X
 } from "lucide-react";
+import Modal from "./components/Modal";
+import CvToast from "./components/CvToast";
 
 // --- Types ---
 interface CodeProblem {
@@ -32,7 +34,7 @@ const CodingCourseManager = () => {
   const token = localStorage.getItem("token");
 
   // ✅ Toast State
-  const [toast, setToast] = useState({ show: false, message: "", type: "success" });
+  const [toast, setToast] = useState<{ show: boolean; message: string; type: "success" | "error" }>({ show: false, message: "", type: "success" });
   const triggerToast = (message: string, type: "success" | "error" = "success") => {
     setToast({ show: true, message, type });
     setTimeout(() => setToast({ ...toast, show: false }), 3000);
@@ -194,9 +196,8 @@ const CodingCourseManager = () => {
       </div>
 
       {/* 4. Edit Modal */}
-      {isEditModalOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-            <div className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+      <Modal open={isEditModalOpen} onClose={() => setIsEditModalOpen(false)}>
+            <div className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200" onClick={(e) => e.stopPropagation()}>
                 <div className="px-8 py-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                     <h3 className="font-bold text-xl text-slate-800">Edit Challenge</h3>
                     <button onClick={() => setIsEditModalOpen(false)}><X className="text-slate-400 hover:text-slate-600" /></button>
@@ -222,17 +223,14 @@ const CodingCourseManager = () => {
                     <button onClick={handleSaveEdit} className="px-6 py-3 rounded-xl font-bold bg-[#005EB8] text-white hover:bg-blue-700 transition-colors shadow-lg shadow-blue-200">Save Changes</button>
                 </div>
             </div>
-        </div>
-      )}
+      </Modal>
 
-      {/* Toast Notification */}
-      {toast.show && (
-        <div style={{ position: "fixed", top: "20px", right: "20px", background: "white", padding: "16px 24px", borderRadius: "12px", boxShadow: "0 10px 30px -5px rgba(0,0,0,0.15)", borderLeft: `6px solid ${toast.type === "success" ? "#87C232" : "#ef4444"}`, display: "flex", alignItems: "center", gap: "12px", zIndex: 9999, animation: "slideIn 0.3s ease-out" }}>
-            {toast.type === "success" ? <CheckCircle size={24} color="#87C232" /> : <AlertTriangle size={24} color="#ef4444" />}
-            <div><h4 style={{ margin: "0", fontSize: "14px", fontWeight: "700", color: "#1e293b" }}>{toast.type === "success" ? "Success" : "Error"}</h4><p style={{ margin: 0, fontSize: "13px", color: "#64748b" }}>{toast.message}</p></div>
-            <button onClick={() => setToast({ ...toast, show: false })} style={{ background: "none", border: "none", cursor: "pointer", marginLeft: "10px", color: "#94a3b8" }}><X size={16} /></button>
-        </div>
-      )}
+      <CvToast
+        show={toast.show}
+        type={toast.type}
+        message={toast.message}
+        onClose={() => setToast({ ...toast, show: false })}
+      />
     </div>
   );
 };

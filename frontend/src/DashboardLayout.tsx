@@ -44,13 +44,13 @@ const DashboardLayout = () => {
     <div className="flex h-screen bg-transparent font-sans">
       {mobileMenuOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          className="fixed inset-0 z-[var(--z-sidebar)] bg-black/50 lg:hidden"
           onClick={() => setMobileMenuOpen(false)}
         />
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex flex-col glass border-r border-border/50 shadow-xl transition-all duration-300 lg:static lg:shadow-none
+        className={`fixed inset-y-0 left-0 z-[var(--z-header)] flex flex-col glass border-r border-border/50 shadow-xl transition-all duration-300 lg:static lg:shadow-none
             ${mobileMenuOpen ? "translate-x-0 w-72" : "-translate-x-full lg:translate-x-0"}
             ${collapsed ? "lg:w-20" : "lg:w-72"}
         `}
@@ -115,7 +115,7 @@ const DashboardLayout = () => {
       </aside>
 
       <main className="flex-1 flex flex-col h-full min-h-0 w-full">
-        <header className="relative z-50 h-20 shrink-0 glass border-b border-border/50 flex items-center justify-between px-6 lg:px-10">
+        <header className="relative z-[var(--z-header)] h-20 shrink-0 glass border-b border-border/50 flex items-center justify-between px-6 lg:px-10">
           <div className="flex items-center gap-4">
             <button onClick={() => setMobileMenuOpen(true)} className="lg:hidden p-2 -ml-2 text-muted-foreground">
               <Menu size={24} />
@@ -142,7 +142,7 @@ const DashboardLayout = () => {
           </div>
         </header>
 
-        <div className="flex-1 p-4 lg:p-10 overflow-y-auto overflow-x-hidden bg-transparent isolate">
+        <div className="flex-1 p-4 lg:p-10 overflow-y-auto overflow-x-hidden bg-transparent">
           <Outlet />
         </div>
       </main>

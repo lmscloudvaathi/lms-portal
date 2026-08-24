@@ -1,7 +1,9 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
 import API_BASE_URL from './config';
-import { Trash2, User, Search, AlertCircle, X, Calendar, CheckCircle, AlertTriangle, RefreshCw, Key } from "lucide-react"; // ✅ Added Icons
+import { Trash2, User, Search, AlertCircle, Calendar, RefreshCw, Key } from "lucide-react";
+import Modal from "./components/Modal";
+import CvToast from "./components/CvToast";
 
 interface Student {
   id: number;
@@ -213,10 +215,9 @@ const StudentManagement = () => {
       </div>
 
       {/* CONFIRMATION MODAL */}
-      {
-        studentToDelete && (
-          <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(15, 23, 42, 0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, backdropFilter: "blur(2px)" }}>
-            <div style={{ background: "white", padding: "30px", borderRadius: "16px", width: "400px", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)", textAlign: "center" }}>
+      <Modal open={!!studentToDelete} onClose={() => setStudentToDelete(null)}>
+            {studentToDelete && (
+            <div style={{ background: "white", padding: "30px", borderRadius: "16px", width: "400px", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)", textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
               <div style={{ width: "50px", height: "50px", background: "#fef2f2", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px auto" }}>
                 <AlertCircle size={28} color={brand.danger} />
               </div>
@@ -229,15 +230,12 @@ const StudentManagement = () => {
                 <button onClick={handleDelete} style={{ flex: 1, padding: "12px", background: brand.danger, border: "none", borderRadius: "8px", fontWeight: "700", color: "white", cursor: "pointer" }}>Yes, Remove</button>
               </div>
             </div>
-          </div>
-        )
-      }
+            )}
+      </Modal>
 
-      {/* ✅ NEW: RESET PASSWORD MODAL */}
-      {
-        resetModal && (
-          <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(15, 23, 42, 0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, backdropFilter: "blur(2px)" }}>
-            <div style={{ background: "white", padding: "30px", borderRadius: "16px", width: "400px", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)", textAlign: "center" }}>
+      <Modal open={!!resetModal} onClose={() => { setResetModal(null); setNewPass(""); }}>
+            {resetModal && (
+            <div style={{ background: "white", padding: "30px", borderRadius: "16px", width: "400px", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)", textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
               <div style={{ width: "50px", height: "50px", background: "#f0f9ff", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px auto" }}>
                 <Key size={24} color={brand.blue} />
               </div>
@@ -259,34 +257,16 @@ const StudentManagement = () => {
                 <button onClick={handleResetPassword} disabled={!newPass} style={{ flex: 1, padding: "12px", background: brand.blue, border: "none", borderRadius: "8px", fontWeight: "700", color: "white", cursor: "pointer", opacity: newPass ? 1 : 0.7 }}>Update</button>
               </div>
             </div>
-          </div>
-        )
-      }
+            )}
+      </Modal>
 
-      {/* ✅ NEW: TOAST NOTIFICATION COMPONENT */}
-      {
-        toast.show && (
-          <div style={{
-            position: "fixed", top: "20px", right: "20px",
-            background: "white", padding: "16px 24px", borderRadius: "12px",
-            boxShadow: "0 10px 30px -5px rgba(0,0,0,0.15)",
-            borderLeft: `6px solid ${toast.type === "success" ? brand.green : "#ef4444"}`,
-            display: "flex", alignItems: "center", gap: "12px", zIndex: 9999,
-            animation: "slideIn 0.3s ease-out"
-          }}>
-            {toast.type === "success" ? <CheckCircle size={24} color={brand.green} /> : <AlertTriangle size={24} color="#ef4444" />}
-            <div>
-              <h4 style={{ margin: "0", fontSize: "14px", fontWeight: "700", color: brand.textMain }}>
-                {toast.type === "success" ? "Success" : "Error"}
-              </h4>
-              <p style={{ margin: 0, fontSize: "13px", color: brand.textLight }}>{toast.message}</p>
-            </div>
-            <button onClick={() => setToast(prev => ({ ...prev, show: false }))} style={{ background: "none", border: "none", cursor: "pointer", marginLeft: "10px", color: "#94a3b8" }}>
-              <X size={16} />
-            </button>
-          </div>
-        )
-      }
+      <CvToast
+        show={toast.show}
+        type={toast.type}
+        message={toast.message}
+        successColor={brand.green}
+        onClose={() => setToast((prev) => ({ ...prev, show: false }))}
+      />
 
     </div >
   );

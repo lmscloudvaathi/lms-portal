@@ -1,7 +1,8 @@
 import { useState } from "react";
 import axios from "axios";
-import { Lock, Save, CheckCircle, AlertCircle, X } from "lucide-react"; // ✅ Added Icons
+import { Lock, Save } from "lucide-react";
 import API_BASE_URL from './config';
+import CvToast from "./components/CvToast";
 const InstructorSettings = () => {
   const [newPassword, setNewPassword] = useState("");
   const [saving, setSaving] = useState(false);
@@ -83,28 +84,13 @@ const InstructorSettings = () => {
 
         </div>
 
-        {/* ✅ NEW: TOAST NOTIFICATION COMPONENT */}
-        {toast.show && (
-            <div style={{ 
-                position: "fixed", top: "20px", right: "20px", 
-                background: "white", padding: "16px 24px", borderRadius: "12px", 
-                boxShadow: "0 10px 30px -5px rgba(0,0,0,0.15)", 
-                borderLeft: `6px solid ${toast.type === "success" ? brand.green : "#ef4444"}`,
-                display: "flex", alignItems: "center", gap: "12px", zIndex: 9999,
-                animation: "slideIn 0.3s ease-out"
-            }}>
-                {toast.type === "success" ? <CheckCircle size={24} color={brand.green} /> : <AlertCircle size={24} color="#ef4444" />}
-                <div>
-                    <h4 style={{ margin: "0", fontSize: "14px", fontWeight: "700", color: brand.textMain }}>
-                        {toast.type === "success" ? "Success" : "Error"}
-                    </h4>
-                    <p style={{ margin: 0, fontSize: "13px", color: brand.textLight }}>{toast.message}</p>
-                </div>
-                <button onClick={() => setToast(prev => ({ ...prev, show: false }))} style={{ background: "none", border: "none", cursor: "pointer", marginLeft: "10px", color: "#94a3b8" }}>
-                    <X size={16} />
-                </button>
-            </div>
-        )}
+        <CvToast
+            show={toast.show}
+            type={toast.type}
+            message={toast.message}
+            successColor={brand.green}
+            onClose={() => setToast((prev) => ({ ...prev, show: false }))}
+        />
     </div>
   );
 };

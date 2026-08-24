@@ -3,9 +3,11 @@ import axios from "axios";
 import API_BASE_URL from './config';
 import {
     Plus, Code, X, Sparkles, Check, Trash2,
-    Download, Users, CheckCircle, AlertTriangle, Pencil
+    Download, Users, Pencil
 } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
+import Modal from "./components/Modal";
+import CvToast from "./components/CvToast";
 
 const CodeArena = () => {
     const [showModal, setShowModal] = useState(false);
@@ -343,10 +345,8 @@ const CodeArena = () => {
                 )}
             </div>
 
-            <AnimatePresence>
-                {showModal && (
-                    <div className="fixed inset-0 bg-[#0f172a]/60 z-50 flex items-center justify-center backdrop-blur-sm p-4">
-                        <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="bg-[#F8FAFC] rounded-2xl shadow-2xl w-full max-w-5xl max-h-[95vh] overflow-y-auto flex flex-col border border-[#cbd5e1]">
+            <Modal open={showModal} onClose={closeModal}>
+                        <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-[#F8FAFC] rounded-2xl shadow-2xl w-full max-w-5xl max-h-[95vh] overflow-y-auto flex flex-col border border-[#cbd5e1]" onClick={(e) => e.stopPropagation()}>
 
                             {/* Header */}
                             <div className="p-6 border-b border-[#cbd5e1] flex justify-between items-center sticky top-0 bg-[#F8FAFC]/95 backdrop-blur-md z-10">
@@ -470,15 +470,10 @@ const CodeArena = () => {
                                 </button>
                             </div>
                         </motion.div>
-                    </div>
-                )}
-            </AnimatePresence>
+            </Modal>
 
-            {/* Results Modal */}
-            <AnimatePresence>
-                {showResultsModal && (
-                    <div className="fixed inset-0 bg-[#0f172a]/60 z-50 flex items-center justify-center backdrop-blur-sm p-4">
-                        <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="bg-[#F8FAFC] rounded-2xl shadow-2xl w-full max-w-4xl flex flex-col border border-[#cbd5e1] overflow-hidden">
+            <Modal open={showResultsModal} onClose={() => { setShowResultsModal(false); setResultsTestId(null); }}>
+                        <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-[#F8FAFC] rounded-2xl shadow-2xl w-full max-w-4xl flex flex-col border border-[#cbd5e1] overflow-hidden" onClick={(e) => e.stopPropagation()}>
 
                             <div className="p-6 border-b border-[#cbd5e1] bg-white flex justify-between items-center">
                                 <div>
@@ -536,32 +531,14 @@ const CodeArena = () => {
                                 )}
                             </div>
                         </motion.div>
-                    </div>
-                )}
-            </AnimatePresence>
+            </Modal>
 
-            {/* ✅ NEW: TOAST NOTIFICATION COMPONENT */}
-            {toast.show && (
-                <div style={{
-                    position: "fixed", top: "20px", right: "20px",
-                    background: "white", padding: "16px 24px", borderRadius: "12px",
-                    boxShadow: "0 10px 30px -5px rgba(0,0,0,0.15)",
-                    borderLeft: `6px solid ${toast.type === "success" ? "#87C232" : "#ef4444"}`,
-                    display: "flex", alignItems: "center", gap: "12px", zIndex: 9999,
-                    animation: "slideIn 0.3s ease-out"
-                }}>
-                    {toast.type === "success" ? <CheckCircle size={24} color="#87C232" /> : <AlertTriangle size={24} color="#ef4444" />}
-                    <div>
-                        <h4 style={{ margin: "0", fontSize: "14px", fontWeight: "700", color: "#1e293b" }}>
-                            {toast.type === "success" ? "Success" : "Error"}
-                        </h4>
-                        <p style={{ margin: 0, fontSize: "13px", color: "#64748b" }}>{toast.message}</p>
-                    </div>
-                    <button onClick={() => setToast(prev => ({ ...prev, show: false }))} style={{ background: "none", border: "none", cursor: "pointer", marginLeft: "10px", color: "#94a3b8" }}>
-                        <X size={16} />
-                    </button>
-                </div>
-            )}
+            <CvToast
+                show={toast.show}
+                type={toast.type}
+                message={toast.message}
+                onClose={() => setToast((prev) => ({ ...prev, show: false }))}
+            />
         </div>
     );
 };

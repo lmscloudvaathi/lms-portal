@@ -44,6 +44,16 @@
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-xl: 20px;
+  --z-base: 0;
+  --z-raised: 10;
+  --z-sticky: 20;
+  --z-dropdown: 30;
+  --z-sidebar: 40;
+  --z-header: 50;
+  --z-overlay: 100;
+  --z-modal: 110;
+  --z-popover: 120;
+  --z-toast: 200;
 }
 
 html {
@@ -168,7 +178,7 @@ h1, h2, h3, h4 {
   .cv-modal-overlay {
     position: fixed;
     inset: 0;
-    z-index: 10000;
+    z-index: var(--z-overlay);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -207,6 +217,60 @@ h1, h2, h3, h4 {
     gap: 10px;
     border-top: 1px solid var(--border);
     background: color-mix(in oklab, var(--muted) 70%, transparent);
+  }
+  .cv-toast {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: var(--z-toast);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: min(420px, calc(100vw - 32px));
+    padding: 16px 24px;
+    border-radius: 12px;
+    border-left: 6px solid var(--neon-cyan);
+    background: white;
+    color: #1e293b;
+    box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.15);
+    animation: cv-toast-slide-in 0.3s ease-out;
+  }
+  .cv-toast-title {
+    margin: 0 0 4px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #1e293b;
+  }
+  .cv-toast-message {
+    margin: 0;
+    font-size: 13px;
+    color: #64748b;
+  }
+  .cv-toast-close {
+    margin-left: 10px;
+    border: none;
+    background: none;
+    cursor: pointer;
+  }
+  .cv-toast-host {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: var(--z-toast);
+    pointer-events: none;
+  }
+  .cv-toast-host > * {
+    pointer-events: auto;
+  }
+  @keyframes cv-toast-slide-in {
+    from {
+      opacity: 0;
+      transform: translateX(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
   }
   .cv-dropzone {
     position: relative;
@@ -637,9 +701,15 @@ label.block,
   box-shadow: 0 20px 50px -24px oklch(5% 0.02 270 / 0.8) !important;
 }
 
-/* Google Identity: keep clickable hit-area invisible so GIS white iframe chrome never shows */
+/* Google Identity: visible face is ours; GIS iframe is click-only and fully invisible */
 .cv-google-login {
   color-scheme: dark;
+  isolation: isolate;
+}
+.cv-google-login__hit {
+  overflow: hidden !important;
+  border-radius: inherit;
+  background: transparent !important;
 }
 .cv-google-login__hit,
 .cv-google-login__hit > div,
@@ -650,8 +720,16 @@ label.block,
   margin: 0 !important;
   border: 0 !important;
   background: transparent !important;
+  box-shadow: none !important;
+}
+.cv-google-login__hit > div {
+  position: absolute !important;
+  inset: 0 !important;
 }
 .cv-google-login__hit iframe {
-  opacity: 0.011;
-  cursor: pointer;
+  position: absolute !important;
+  inset: 0 !important;
+  /* Near-zero keeps clicks working; white GIS chrome stays invisible */
+  opacity: 0.001 !important;
+  cursor: pointer !important;
 }

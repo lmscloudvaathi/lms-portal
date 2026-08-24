@@ -3,8 +3,10 @@ import axios from "axios";
 import API_BASE_URL from './config';
 import {
   UserPlus, Upload, FileSpreadsheet, CheckCircle,
-  Download, AlertCircle, X, Shield
+  Download, X, Shield
 } from "lucide-react";
+import Modal from "./components/Modal";
+import CvToast from "./components/CvToast";
 
 // Types
 interface Course {
@@ -34,7 +36,7 @@ const AddAdmits = () => {
   const [instPhone, setInstPhone] = useState("");
   const [instPassword, setInstPassword] = useState("");
 
-  const [toast, setToast] = useState({ show: false, message: "", type: "success" });
+  const [toast, setToast] = useState<{ show: boolean; message: string; type: "success" | "error" }>({ show: false, message: "", type: "success" });
 
   const triggerToast = (message: string, type: "success" | "error" = "success") => {
     setToast({ show: true, message, type });
@@ -275,8 +277,7 @@ const AddAdmits = () => {
       </div>
 
       {/* CREATE INSTRUCTOR MODAL */}
-      {showInstructorModal && (
-        <div className="cv-modal-overlay" onClick={() => setShowInstructorModal(false)}>
+      <Modal open={showInstructorModal} onClose={() => setShowInstructorModal(false)}>
           <div className="cv-modal max-w-md" onClick={(e) => e.stopPropagation()}>
             <div className="cv-modal-header flex items-center justify-between">
               <h2 className="m-0 text-xl font-extrabold">Create New Instructor</h2>
@@ -307,20 +308,14 @@ const AddAdmits = () => {
               <button type="submit" form="create-instructor-form" className="cv-btn-primary flex-1 !rounded-xl">Generate Credentials</button>
             </div>
           </div>
-        </div>
-      )}
+      </Modal>
 
-      {/* TOAST */}
-      {toast.show && (
-        <div className={`cv-toast ${toast.type === "success" ? "border-l-4 border-l-green-400" : "border-l-4 border-l-red-400"}`}>
-          {toast.type === "success" ? <CheckCircle size={22} className="text-green-400" /> : <AlertCircle size={22} className="text-red-400" />}
-          <div>
-            <h4 className="font-bold text-sm mb-0.5 m-0">{toast.type === "success" ? "Success" : "Error"}</h4>
-            <p className="text-xs text-muted-foreground m-0">{toast.message}</p>
-          </div>
-          <button onClick={() => setToast({ ...toast, show: false })} className="ml-1 border-none bg-transparent text-muted-foreground"><X size={16} /></button>
-        </div>
-      )}
+      <CvToast
+        show={toast.show}
+        type={toast.type}
+        message={toast.message}
+        onClose={() => setToast({ ...toast, show: false })}
+      />
 
       <style>{`
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }

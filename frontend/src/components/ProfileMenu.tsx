@@ -78,7 +78,7 @@ export default function ProfileMenu({
           <div
             ref={menuRef}
             role="menu"
-            style={{ top: pos.top, right: pos.right, zIndex: 99999 }}
+            style={{ top: pos.top, right: pos.right, zIndex: "var(--z-popover)" }}
             className="fixed w-64 rounded-xl border border-border bg-card p-4 shadow-2xl"
           >
             <div className="mb-4 border-b border-border pb-4">

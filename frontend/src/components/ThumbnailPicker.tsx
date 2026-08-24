@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { Image as ImageIcon, Upload, X, ZoomIn, Move, Check } from "lucide-react";
+import Modal from "./Modal";
 import API_BASE_URL, { resolveMediaUrl } from "../config";
 
 const ASPECT = 16 / 9;
@@ -181,8 +182,7 @@ const ThumbnailPicker = ({ value, onChange, compact = false }: ThumbnailPickerPr
       )}
       {error && !editing && <p className="mt-2 text-xs font-bold text-red-400">{error}</p>}
 
-      {editing && (
-        <div className="cv-modal-overlay z-[1200]" onClick={() => !saving && setEditing(false)}>
+      <Modal open={editing} onClose={() => !saving && setEditing(false)} closeOnBackdrop={!saving}>
           <div className="cv-modal max-w-[560px]" onClick={(e) => e.stopPropagation()}>
             <div className="cv-modal-header flex items-start justify-between gap-3">
               <div>
@@ -254,8 +254,7 @@ const ThumbnailPicker = ({ value, onChange, compact = false }: ThumbnailPickerPr
               </button>
             </div>
           </div>
-        </div>
-      )}
+      </Modal>
     </div>
   );
 };

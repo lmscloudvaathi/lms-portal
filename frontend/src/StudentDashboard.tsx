@@ -19,6 +19,8 @@ import * as blazeface from "@tensorflow-models/blazeface";
 import "@tensorflow/tfjs-backend-webgl";
 import BrandLogo from "./components/BrandLogo";
 import ProfileMenu from "./components/ProfileMenu";
+import Modal from "./components/Modal";
+import CvToast, { ToastPortal } from "./components/CvToast";
 import { CODE_TEMPLATES } from './utils/codeTemplates';
 import { clearSession, getValidSession, isStudentSession } from "./utils/session";
 import { categoryLabel, groupCoursesByCategory, resolveCourseCategory, type CourseCategoryId } from "./utils/courseCategories";
@@ -1183,7 +1185,12 @@ const StudentDashboard = () => {
                     </div>
                 </div>
 
-                {toast.show && <div className={`fixed top-5 right-5 z-[10000] px-6 py-3 rounded-lg shadow-xl text-white font-bold flex items-center gap-3 animate-bounce ${toast.type === "success" ? "bg-green-500" : "bg-red-500"}`}>{toast.type === "success" ? <CheckCircle size={20} /> : <AlertTriangle size={20} />}{toast.message}</div>}
+                <ToastPortal show={toast.show}>
+                    <div className={`px-6 py-3 rounded-lg shadow-xl text-white font-bold flex items-center gap-3 animate-bounce ${toast.type === "success" ? "bg-green-500" : "bg-red-500"}`}>
+                        {toast.type === "success" ? <CheckCircle size={20} /> : <AlertTriangle size={20} />}
+                        {toast.message}
+                    </div>
+                </ToastPortal>
             </div>
         );
     }
@@ -1561,9 +1568,9 @@ const StudentDashboard = () => {
 
 
             {/* 🔵 ENROLLMENT MODAL (Correctly Placed Outside Main Loop) */}
-            {showModal && selectedCourse && (
-                <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(15, 23, 42, 0.7)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-                    <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white rounded-xl shadow-2xl max-w-sm w-full relative overflow-hidden">
+            <Modal open={showModal && !!selectedCourse} onClose={() => setShowModal(false)} overlayStyle={{ background: "rgba(15, 23, 42, 0.7)", backdropFilter: "blur(6px)" }}>
+                    {selectedCourse && (
+                    <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white rounded-xl shadow-2xl max-w-sm w-full relative overflow-hidden" onClick={(e) => e.stopPropagation()}>
                         <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-[#005EB8] to-[#87C232]"></div>
                         <button onClick={() => setShowModal(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X size={20} /></button>
 
@@ -1600,13 +1607,11 @@ const StudentDashboard = () => {
                             </div>
                         </div>
                     </motion.div>
-                </div>
-            )}
+                    )}
+            </Modal>
 
-            {/* 🟢 PROFESSIONAL PASS KEY MODAL */}
-            {showPassKeyModal !== null && (
-                <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(15, 23, 42, 0.6)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-                    <div style={{ background: "var(--surface)", color: "var(--foreground)", padding: "30px", borderRadius: "16px", width: "400px", boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)", border: "1px solid var(--border)" }}>
+            <Modal open={showPassKeyModal !== null} onClose={() => setShowPassKeyModal(null)} overlayStyle={{ background: "rgba(15, 23, 42, 0.6)", backdropFilter: "blur(4px)" }}>
+                    <div style={{ background: "var(--surface)", color: "var(--foreground)", padding: "30px", borderRadius: "16px", width: "400px", boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)", border: "1px solid var(--border)" }} onClick={(e) => e.stopPropagation()}>
                         <div className="flex justify-center mb-4"><div className="bg-blue-50 p-3 rounded-full"><Lock className="text-[#005EB8]" size={32} /></div></div>
                         <h3 style={{ margin: "0 0 10px 0", fontSize: "20px", fontWeight: "800", color: brand.textMain, textAlign: "center" }}>Enter Access Key</h3>
                         <p className="text-center text-slate-500 text-sm mb-2">This challenge is protected. Enter the pass key provided by your instructor.</p>
@@ -1614,18 +1619,16 @@ const StudentDashboard = () => {
                         <input type="text" placeholder="e.g. SECRET123" value={passKeyInput} onChange={(e) => setPassKeyInput(e.target.value)} className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-[#005EB8] text-center font-bold text-lg tracking-widest mb-6" />
                         <div style={{ display: "flex", gap: "10px" }}><button onClick={() => setShowPassKeyModal(null)} style={{ flex: 1, padding: "12px", background: "transparent", border: `1px solid ${brand.border}`, borderRadius: "8px", fontWeight: "bold", color: brand.textLight, cursor: "pointer" }}>Cancel</button><button onClick={handleStartTest} style={{ flex: 1, padding: "12px", background: "var(--gradient-neon)", border: "none", borderRadius: "8px", fontWeight: "bold", color: "#071018", cursor: "pointer" }}>Start Test</button></div>
                     </div>
-                </div>
-            )}
+            </Modal>
 
-            {/* ✅ PROFESSIONAL TOAST UI */}
-            {toast.show && (
-                <div style={{ position: "fixed", top: "20px", right: "20px", zIndex: 9999, background: "white", padding: "16px 24px", borderRadius: "12px", boxShadow: "0 10px 30px -5px rgba(0,0,0,0.15)", borderLeft: `6px solid ${toast.type === "success" ? brand.cloudGreen : "#ef4444"}`, display: "flex", alignItems: "center", gap: "12px", animation: "slideIn 0.3s ease-out" }}>
-                    {toast.type === "success" ? <CheckCircle size={24} color={brand.cloudGreen} /> : <AlertTriangle size={24} color="#ef4444" />}
-                    <div><h4 style={{ margin: "0 0 4px 0", fontSize: "14px", fontWeight: "700", color: brand.textMain }}>{toast.type === "success" ? "Success" : "Alert"}</h4><p style={{ margin: 0, fontSize: "13px", color: brand.textLight }}>{toast.message}</p></div>
-                    <button onClick={() => setToast({ ...toast, show: false })} style={{ background: "none", border: "none", cursor: "pointer", marginLeft: "10px" }}><X size={16} color="#94a3b8" /></button>
-                    <style>{`@keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }`}</style>
-                </div>
-            )}
+            <CvToast
+                show={toast.show}
+                type={toast.type}
+                message={toast.message}
+                title={toast.type === "success" ? "Success" : "Alert"}
+                successColor={brand.cloudGreen}
+                onClose={() => setToast({ ...toast, show: false })}
+            />
         </div>
     );
 };

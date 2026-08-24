@@ -4,10 +4,12 @@ import axios from "axios";
 import API_BASE_URL from "./config";
 import { COURSE_CATEGORY_OPTIONS } from "./utils/courseCategories";
 import ThumbnailPicker from "./components/ThumbnailPicker";
+import Modal from "./components/Modal";
+import CvToast from "./components/CvToast";
 import {
     Plus, ArrowLeft, Video, HelpCircle, Zap, FileText,
     Edit3, Layout, X, Link, Clock, Radio, BookOpen, Search, ChevronDown,
-    AlertCircle, Trash2, CheckCircle, Code, Edit, Sparkles
+    Trash2, Code, Edit, Sparkles
 } from "lucide-react";
 
 interface Module {
@@ -104,7 +106,7 @@ const CourseBuilder = () => {
     const courseDropdownRef = useRef<HTMLDivElement | null>(null);
     const sourceCourseDropdownRef = useRef<HTMLDivElement | null>(null);
 
-    const [toast, setToast] = useState({ show: false, message: "", type: "success" });
+    const [toast, setToast] = useState<{ show: boolean; message: string; type: "success" | "error" }>({ show: false, message: "", type: "success" });
 
     const [isEditingCourse, setIsEditingCourse] = useState(false);
     const [editCourseForm, setEditCourseForm] = useState({
@@ -864,9 +866,8 @@ const CourseBuilder = () => {
                 </div>
 
                 {/* ✅ EDIT COURSE MODAL (Included inside CodingBuilder so it works) */}
-                {isEditingCourse && (
-                    <div style={modalOverlay}>
-                        <div style={modalContent}>
+                <Modal open={isEditingCourse} onClose={() => setIsEditingCourse(false)} overlayStyle={{ background: "rgba(15, 23, 42, 0.7)" }}>
+                        <div style={modalContent} onClick={(e) => e.stopPropagation()}>
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px", paddingBottom: "15px", borderBottom: `1px solid ${brand.border}` }}>
                                 <h3 style={{ fontSize: "20px", fontWeight: "800", margin: 0, display: "flex", alignItems: "center", gap: "10px" }}>
                                     <Edit size={20} color={brand.blue} /> Edit Course Details
@@ -913,8 +914,7 @@ const CourseBuilder = () => {
                             </div>
                             <button onClick={handleSaveCourseDetails} style={saveButton}>Save Changes</button>
                         </div>
-                    </div>
-                )}
+                </Modal>
                 {/* End Modal */}
             </div>
         );
@@ -1077,9 +1077,8 @@ const CourseBuilder = () => {
                 </main >
             </div >
 
-            {showLibraryModal && (
-                <div style={modalOverlay}>
-                    <div style={{ ...modalContent, maxWidth: "900px", maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <Modal open={showLibraryModal} onClose={() => setShowLibraryModal(false)} overlayStyle={{ background: "rgba(15, 23, 42, 0.7)" }}>
+                    <div style={{ ...modalContent, maxWidth: "900px", maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden" }} onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
                             <h3 style={{ fontSize: "22px", fontWeight: "800", margin: 0 }}>Add from Library</h3>
                             <X onClick={() => setShowLibraryModal(false)} style={{ cursor: "pointer", color: brand.textLight }} />
@@ -1158,7 +1157,7 @@ const CourseBuilder = () => {
                                                         top: "calc(100% + 6px)",
                                                         left: 0,
                                                         right: 0,
-                                                        zIndex: 1200,
+                                                        zIndex: 10,
                                                         background: "white",
                                                         border: `1px solid ${brand.border}`,
                                                         borderRadius: "10px",
@@ -1229,7 +1228,7 @@ const CourseBuilder = () => {
                                                         top: "calc(100% + 6px)",
                                                         left: 0,
                                                         right: 0,
-                                                        zIndex: 1200,
+                                                        zIndex: 10,
                                                         background: "white",
                                                         border: `1px solid ${brand.border}`,
                                                         borderRadius: "10px",
@@ -1395,7 +1394,7 @@ const CourseBuilder = () => {
                                             </button>
                                             <ChevronDown size={16} style={{ position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)", color: brand.textLight, pointerEvents: "none" }} />
                                             {isSourceCourseDropdownOpen && (
-                                                <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, zIndex: 1200, background: "white", border: `1px solid ${brand.border}`, borderRadius: "10px", boxShadow: "0 12px 30px rgba(15,23,42,0.12)", maxHeight: "240px", overflowY: "auto", padding: "6px" }}>
+                                                <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, zIndex: 10, background: "white", border: `1px solid ${brand.border}`, borderRadius: "10px", boxShadow: "0 12px 30px rgba(15,23,42,0.12)", maxHeight: "240px", overflowY: "auto", padding: "6px" }}>
                                                     <button
                                                         type="button"
                                                         onClick={() => {
@@ -1496,12 +1495,10 @@ const CourseBuilder = () => {
                             </>
                         )}
                     </div>
-                </div>
-            )}
+            </Modal>
 
-            {activeModal && (
-                <div style={modalOverlay}>
-                    <div style={modalContent}>
+            <Modal open={!!activeModal} onClose={() => setActiveModal(null)} overlayStyle={{ background: "rgba(15, 23, 42, 0.7)" }}>
+                    <div style={modalContent} onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "32px" }}>
                             <h3 style={{ fontSize: "22px", fontWeight: "800", margin: 0 }}>Add {activeModal}</h3>
                             <X onClick={() => setActiveModal(null)} style={{ cursor: "pointer", color: brand.textLight }} />
@@ -1651,13 +1648,9 @@ const CourseBuilder = () => {
                         )}
                         <button onClick={saveContentItem} style={saveButton}>Save {activeModal === "Code Test" ? "Test" : activeModal === "Heading" ? "Section Heading" : "Learning Item"}</button>
                     </div>
-                </div>
-            )}
-            {/* ✅ NEW: EDIT COURSE DETAILS MODAL */}
-            {
-                isEditingCourse && (
-                    <div style={modalOverlay}>
-                        <div style={modalContent}>
+            </Modal>
+            <Modal open={isEditingCourse} onClose={() => setIsEditingCourse(false)} overlayStyle={{ background: "rgba(15, 23, 42, 0.7)" }}>
+                        <div style={modalContent} onClick={(e) => e.stopPropagation()}>
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px", paddingBottom: "15px", borderBottom: `1px solid ${brand.border}` }}>
                                 <h3 style={{ fontSize: "20px", fontWeight: "800", margin: 0, display: "flex", alignItems: "center", gap: "10px" }}>
                                     <Edit size={20} color={brand.blue} /> Edit Course Details
@@ -1736,10 +1729,14 @@ const CourseBuilder = () => {
 
                             <button onClick={handleSaveCourseDetails} style={saveButton}>Save Changes</button>
                         </div>
-                    </div>
-                )
-            }
-            {toast.show && (<div style={{ position: "fixed", top: "20px", right: "20px", zIndex: 9999, background: "white", padding: "16px 24px", borderRadius: "12px", boxShadow: "0 10px 30px -5px rgba(0,0,0,0.15)", borderLeft: `6px solid ${toast.type === "success" ? brand.green : "#ef4444"}`, display: "flex", alignItems: "center", gap: "12px", animation: "slideIn 0.3s ease-out" }}>{toast.type === "success" ? <CheckCircle size={24} color={brand.green} /> : <AlertCircle size={24} color="#ef4444" />}<div><h4 style={{ margin: "0 0 4px 0", fontSize: "14px", fontWeight: "700", color: brand.textMain }}>{toast.type === "success" ? "Success" : "Error"}</h4><p style={{ margin: 0, fontSize: "13px", color: brand.textLight }}>{toast.message}</p></div><button onClick={() => setToast({ ...toast, show: false })} style={{ background: "none", border: "none", cursor: "pointer", marginLeft: "10px" }}><X size={16} color="#94a3b8" /></button><style>{`@keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }`}</style></div>)}
+            </Modal>
+            <CvToast
+                show={toast.show}
+                type={toast.type}
+                message={toast.message}
+                successColor={brand.green}
+                onClose={() => setToast({ ...toast, show: false })}
+            />
         </div >
     );
 };
@@ -1747,7 +1744,6 @@ const CourseBuilder = () => {
 const selectorCard = { display: "flex", alignItems: "center", gap: "20px", padding: "24px", background: "var(--surface)", borderRadius: "16px", border: "1.5px solid var(--border)", cursor: "pointer", transition: "all 0.2s ease", boxShadow: "0 2px 4px rgba(0,0,0,0.02)" };
 const cardTitle = { fontSize: "16px", fontWeight: "800", color: "var(--foreground)", marginBottom: "4px" };
 const cardDesc = { fontSize: "12px", color: "var(--muted-foreground)" };
-const modalOverlay = { position: "fixed" as const, top: 0, left: 0, right: 0, bottom: 0, background: "rgba(15, 23, 42, 0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: "20px" };
 const modalContent = { background: "var(--surface)", width: "100%", maxWidth: "600px", maxHeight: "86vh", overflowY: "auto" as const, padding: "24px", borderRadius: "20px", boxShadow: "0 25px 50px -12px rgba(0,0,0,0.5)", color: "var(--foreground)", border: "1px solid var(--border)" };
 const labelStyle = { display: "block", marginBottom: "8px", fontSize: "12px", fontWeight: "800", color: "var(--foreground)", textTransform: "uppercase" as const, letterSpacing: "0.5px" };
 const inputStyle = { width: "100%", padding: "12px 14px", borderRadius: "12px", border: "1.5px solid color-mix(in oklab, var(--neon-cyan) 28%, var(--border))", fontSize: "15px", outline: "none", boxSizing: "border-box" as const, background: "var(--input)", color: "var(--foreground)", fontWeight: 600 };

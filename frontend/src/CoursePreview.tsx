@@ -6,9 +6,11 @@ import type { DropResult } from "@hello-pangea/dnd"; import API_BASE_URL from '.
 import {
   ArrowLeft, Trash2, Edit2, Video, FileText,
   Code, HelpCircle, FileQuestion, ChevronDown, ChevronRight,
-  CheckCircle, X, AlertTriangle, GripVertical, Radio, Zap,
+  X, GripVertical, Radio, Zap,
   Check
 } from "lucide-react";
+import Modal from "./components/Modal";
+import CvToast from "./components/CvToast";
 
 // --- Types ---
 interface ContentItem {
@@ -486,9 +488,8 @@ const CoursePreview = () => {
       </DragDropContext>
 
       {/* EDIT ITEM MODAL */}
-      {editingItem && (
-        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(15, 23, 42, 0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, backdropFilter: "blur(4px)" }}>
-          <div style={{ background: brand.cardBg, padding: "30px", borderRadius: "16px", width: "560px", maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)" }}>
+      <Modal open={!!editingItem} onClose={() => setEditingItem(null)}>
+          <div style={{ background: brand.cardBg, padding: "30px", borderRadius: "16px", width: "560px", maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)" }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ marginTop: 0, color: brand.textMain, fontWeight: "800", fontSize: "18px" }}>Edit Content</h3>
             <div style={{ marginBottom: "15px" }}>
               <label style={{ display: "block", fontSize: "12px", fontWeight: "700", marginBottom: "5px", color: brand.textLight, textTransform: "uppercase" }}>Title</label>
@@ -544,28 +545,15 @@ const CoursePreview = () => {
               <button onClick={() => setEditingItem(null)} style={{ flex: 1, padding: "10px", background: "white", color: brand.textLight, border: `1px solid ${brand.border}`, borderRadius: "8px", fontWeight: "700", cursor: "pointer" }}>Cancel</button>
             </div>
           </div>
-        </div>
-      )}
+      </Modal>
 
-      {/* TOAST */}
-      {toast.show && (
-        <div style={{
-          position: "fixed", top: "20px", right: "20px", zIndex: 9999,
-          background: "white", padding: "16px 24px", borderRadius: "12px",
-          boxShadow: "0 10px 30px -5px rgba(0,0,0,0.15)", borderLeft: `6px solid ${toast.type === "success" ? brand.green : "#ef4444"}`,
-          display: "flex", alignItems: "center", gap: "12px", animation: "slideIn 0.3s ease-out"
-        }}>
-          {toast.type === "success" ? <CheckCircle size={24} color={brand.green} /> : <AlertTriangle size={24} color="#ef4444" />}
-          <div>
-            <h4 style={{ margin: "0 0 4px 0", fontSize: "14px", fontWeight: "700", color: brand.textMain }}>{toast.type === "success" ? "Success" : "Error"}</h4>
-            <p style={{ margin: 0, fontSize: "13px", color: brand.textLight }}>{toast.message}</p>
-          </div>
-          <button onClick={() => setToast(prev => ({ ...prev, show: false }))} style={{ background: "none", border: "none", cursor: "pointer", marginLeft: "10px" }}>
-            <X size={16} color="#94a3b8" />
-          </button>
-          <style>{`@keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }`}</style>
-        </div>
-      )}
+      <CvToast
+        show={toast.show}
+        type={toast.type}
+        message={toast.message}
+        successColor={brand.green}
+        onClose={() => setToast((prev) => ({ ...prev, show: false }))}
+      />
     </div>
   );
 };

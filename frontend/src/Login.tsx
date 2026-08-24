@@ -71,7 +71,7 @@ const GoogleMark = () => (
   </svg>
 );
 
-/** Custom dark button; Google iframe sits invisible on top so clicks still work (hides GIS white box). */
+/** Custom dark Continue-with-Google control (GIS iframe is click-only, never visible). */
 function LearnerGoogleButton({
   onCredential,
   onError,
@@ -81,24 +81,34 @@ function LearnerGoogleButton({
   onError: () => void;
   context?: "signin" | "signup";
 }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
   const callbacksRef = useRef({ onCredential, onError });
   callbacksRef.current = { onCredential, onError };
 
   useEffect(() => {
-    if (!GOOGLE_CLIENT_ID || !hostRef.current) return;
+    if (!GOOGLE_CLIENT_ID || !hostRef.current || !wrapRef.current) return;
 
     let cancelled = false;
     let attempts = 0;
+    let pollId = 0;
     const host = hostRef.current;
+    const wrap = wrapRef.current;
     setReady(false);
 
     const mount = () => {
-      if (cancelled || !host) return;
+      if (cancelled || !host || !wrap) return;
       const gsi = window.google?.accounts?.id;
       if (!gsi) {
-        if (attempts++ < 50) window.setTimeout(mount, 100);
+        if (attempts++ < 50) pollId = window.setTimeout(mount, 100);
+        return;
+      }
+
+      // Wait until the Create Account / Login panel is actually laid out (avoids white GIS chrome).
+      const width = Math.round(wrap.getBoundingClientRect().width);
+      if (width < 200) {
+        if (attempts++ < 50) pollId = window.setTimeout(mount, 80);
         return;
       }
 
@@ -113,7 +123,6 @@ function LearnerGoogleButton({
         context,
         itp_support: true,
       });
-      // Width matches the visual button; iframe stays opacity 0 so the white GIS chrome never shows.
       gsi.renderButton(host, {
         type: "standard",
         theme: "filled_black",
@@ -121,14 +130,16 @@ function LearnerGoogleButton({
         text: "continue_with",
         shape: "rectangular",
         logo_alignment: "left",
-        width: 348,
+        width: Math.min(350, width),
       });
       if (!cancelled) setReady(true);
     };
 
-    mount();
+    // Defer one frame so signup slide/opacity animation doesn't leave a white box.
+    pollId = window.setTimeout(mount, 120);
     return () => {
       cancelled = true;
+      window.clearTimeout(pollId);
       host.innerHTML = "";
       try {
         window.google?.accounts?.id?.cancel();
@@ -141,23 +152,24 @@ function LearnerGoogleButton({
   if (!GOOGLE_CLIENT_ID) return null;
 
   return (
-    <div className="cv-google-login relative mb-5 h-11 w-full max-w-[350px]">
+    <div ref={wrapRef} className="cv-google-login relative mx-auto mb-5 h-11 w-full max-w-[350px] overflow-hidden rounded-xl">
       <div
-        className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center gap-3 rounded-xl border px-4 text-sm font-semibold text-foreground"
+        className="cv-google-login__face pointer-events-none absolute inset-0 z-0 flex items-center justify-center gap-3 border px-4 text-sm font-semibold text-foreground"
         style={{
           background: "var(--surface-elevated)",
           borderColor: "color-mix(in oklab, var(--neon-cyan) 28%, var(--border))",
+          borderRadius: "inherit",
         }}
         aria-hidden
       >
-        <span className="flex h-7 w-7 items-center justify-center rounded-md bg-white">
+        <span className="flex h-7 w-7 items-center justify-center rounded-md bg-white shadow-sm">
           <GoogleMark />
         </span>
         Continue with Google
       </div>
       <div
         ref={hostRef}
-        className={`cv-google-login__hit absolute inset-0 z-10 overflow-hidden rounded-xl ${ready ? "opacity-[0.011]" : "opacity-0"}`}
+        className={`cv-google-login__hit absolute inset-0 z-20 ${ready ? "is-ready" : ""}`}
         aria-label="Continue with Google"
         title="Continue with Google"
       />
@@ -365,6 +377,7 @@ const Login = () => {
 
             {!isSignUp && (
               <LearnerGoogleButton
+                key="google-signin"
                 context="signin"
                 onCredential={(c) => void completeGoogleSignIn(c, "login")}
                 onError={() => triggerToast("Google sign-in was cancelled or failed.", "error")}
@@ -444,6 +457,7 @@ const Login = () => {
 
               {isSignUp && !showSignupOtpInput && (
                 <LearnerGoogleButton
+                  key="google-signup"
                   context="signup"
                   onCredential={(c) => void completeGoogleSignIn(c, "signup")}
                   onError={() => triggerToast("Google sign-in was cancelled or failed.", "error")}
