@@ -19,6 +19,7 @@ from sqlalchemy.future import select
 import models
 import schemas
 from database import get_db
+from password_utils import get_password_hash
 from super_admin import is_super_admin_email
 
 router = APIRouter(prefix="/auth/google", tags=["auth-google"])
@@ -143,4 +144,9 @@ async def google_student_auth(req: schemas.GoogleStudentAuthRequest, db: AsyncSe
     import main as app_main
 
     access = app_main.create_access_token(data={"sub": user.email, "role": user.role})
-    return {"access_token": access, "token_type": "bearer", "role": user.role}
+    return {
+        "access_token": access,
+        "token_type": "bearer",
+        "role": user.role,
+        "email": user.email,
+    }

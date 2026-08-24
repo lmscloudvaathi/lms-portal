@@ -699,35 +699,23 @@ label.block,
   box-shadow: 0 20px 50px -24px oklch(5% 0.02 270 / 0.8) !important;
 }
 
-/* Google Identity: visible face is ours; GIS iframe is click-only and fully invisible */
-.cv-google-login {
+/* Google Sign-In — native GIS button, dark theme */
+.cv-google-login-native {
   color-scheme: dark;
-  isolation: isolate;
+  width: 100%;
+  max-width: 350px;
+  margin-left: auto;
+  margin-right: auto;
+  margin-bottom: 1.25rem;
+  overflow: hidden;
+  border-radius: 12px;
 }
-.cv-google-login__hit {
-  overflow: hidden !important;
-  border-radius: inherit;
-  background: transparent !important;
-}
-.cv-google-login__hit,
-.cv-google-login__hit > div,
-.cv-google-login__hit iframe {
+.cv-google-login-native > div {
   width: 100% !important;
-  height: 100% !important;
-  max-width: none !important;
-  margin: 0 !important;
-  border: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
+  display: flex !important;
+  justify-content: center !important;
 }
-.cv-google-login__hit > div {
-  position: absolute !important;
-  inset: 0 !important;
-}
-.cv-google-login__hit iframe {
-  position: absolute !important;
-  inset: 0 !important;
-  /* Near-zero keeps clicks working; white GIS chrome stays invisible */
-  opacity: 0.001 !important;
-  cursor: pointer !important;
+.cv-google-login-native iframe {
+  border-radius: 12px !important;
+  max-width: 100% !important;
 }

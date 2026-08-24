@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { GoogleLogin } from "@react-oauth/google";
 import axios from "axios";
 import API_BASE_URL, { GOOGLE_CLIENT_ID } from "./config";
 import {
@@ -25,28 +26,6 @@ interface ToastState {
   type: "success" | "error";
 }
 
-type GoogleCredentialResponse = { credential?: string };
-type GooglePromptNotification = {
-  isNotDisplayed: () => boolean;
-  isSkippedMoment: () => boolean;
-  isDismissedMoment: () => boolean;
-};
-
-declare global {
-  interface Window {
-    google?: {
-      accounts: {
-        id: {
-          initialize: (config: Record<string, unknown>) => void;
-          renderButton: (parent: HTMLElement, config: Record<string, unknown>) => void;
-          prompt: (cb?: (notification: GooglePromptNotification) => void) => void;
-          cancel: () => void;
-        };
-      };
-    };
-  }
-}
-
 const isStaffRole = (role: string) => role === "instructor" || role === "admin";
 
 function apiErrorMessage(err: unknown, fallback: string): string {
@@ -62,116 +41,35 @@ function apiErrorMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
-const GoogleMark = () => (
-  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden className="shrink-0">
-    <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
-    <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-    <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
-    <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
-  </svg>
-);
-
-/** Custom dark Continue-with-Google control (GIS iframe is click-only, never visible). */
-function LearnerGoogleButton({
+function LearnerGoogleSignIn({
+  mode,
   onCredential,
   onError,
-  context = "signin",
 }: {
+  mode: "login" | "signup";
   onCredential: (credential: string | undefined) => void;
   onError: () => void;
-  context?: "signin" | "signup";
 }) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const hostRef = useRef<HTMLDivElement>(null);
-  const [ready, setReady] = useState(false);
-  const callbacksRef = useRef({ onCredential, onError });
-  callbacksRef.current = { onCredential, onError };
-
-  useEffect(() => {
-    if (!GOOGLE_CLIENT_ID || !hostRef.current || !wrapRef.current) return;
-
-    let cancelled = false;
-    let attempts = 0;
-    let pollId = 0;
-    const host = hostRef.current;
-    const wrap = wrapRef.current;
-    setReady(false);
-
-    const mount = () => {
-      if (cancelled || !host || !wrap) return;
-      const gsi = window.google?.accounts?.id;
-      if (!gsi) {
-        if (attempts++ < 50) pollId = window.setTimeout(mount, 100);
-        return;
-      }
-
-      // Wait until the Create Account / Login panel is actually laid out (avoids white GIS chrome).
-      const width = Math.round(wrap.getBoundingClientRect().width);
-      if (width < 200) {
-        if (attempts++ < 50) pollId = window.setTimeout(mount, 80);
-        return;
-      }
-
-      host.innerHTML = "";
-      gsi.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: (response: GoogleCredentialResponse) => {
-          callbacksRef.current.onCredential(response.credential);
-        },
-        auto_select: false,
-        cancel_on_tap_outside: true,
-        context,
-        itp_support: true,
-      });
-      gsi.renderButton(host, {
-        type: "standard",
-        theme: "filled_black",
-        size: "large",
-        text: "continue_with",
-        shape: "rectangular",
-        logo_alignment: "left",
-        width: Math.min(350, width),
-      });
-      if (!cancelled) setReady(true);
-    };
-
-    // Defer one frame so signup slide/opacity animation doesn't leave a white box.
-    pollId = window.setTimeout(mount, 120);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(pollId);
-      host.innerHTML = "";
-      try {
-        window.google?.accounts?.id?.cancel();
-      } catch {
-        /* ignore */
-      }
-    };
-  }, [context]);
-
-  if (!GOOGLE_CLIENT_ID) return null;
+  if (!GOOGLE_CLIENT_ID) {
+    return (
+      <p className="mx-auto mb-5 max-w-[350px] rounded-xl border border-border bg-[var(--surface-elevated)] px-4 py-3 text-xs text-muted-foreground">
+        Google Sign-In is not configured for this environment.
+      </p>
+    );
+  }
 
   return (
-    <div ref={wrapRef} className="cv-google-login relative mx-auto mb-5 h-11 w-full max-w-[350px] overflow-hidden rounded-xl">
-      <div
-        className="cv-google-login__face pointer-events-none absolute inset-0 z-0 flex items-center justify-center gap-3 border px-4 text-sm font-semibold text-foreground"
-        style={{
-          background: "var(--surface-elevated)",
-          borderColor: "color-mix(in oklab, var(--neon-cyan) 28%, var(--border))",
-          borderRadius: "inherit",
-        }}
-        aria-hidden
-      >
-        <span className="flex h-7 w-7 items-center justify-center rounded-md bg-white shadow-sm">
-          <GoogleMark />
-        </span>
-        Continue with Google
-      </div>
-      <div
-        ref={hostRef}
-        className={`cv-google-login__hit absolute inset-0 z-20 ${ready ? "is-ready" : ""}`}
-        aria-label="Continue with Google"
-        title="Continue with Google"
+    <div className="cv-google-login-native">
+      <GoogleLogin
+        onSuccess={(response) => onCredential(response.credential)}
+        onError={onError}
+        useOneTap={false}
+        theme="filled_black"
+        size="large"
+        text="continue_with"
+        shape="rectangular"
+        width="350"
+        context={mode === "signup" ? "signup" : "signin"}
       />
     </div>
   );
@@ -376,9 +274,8 @@ const Login = () => {
             <p className="mb-4 text-sm text-muted-foreground">Sign in with Google or email and password</p>
 
             {!isSignUp && (
-              <LearnerGoogleButton
-                key="google-signin"
-                context="signin"
+              <LearnerGoogleSignIn
+                mode="login"
                 onCredential={(c) => void completeGoogleSignIn(c, "login")}
                 onError={() => triggerToast("Google sign-in was cancelled or failed.", "error")}
               />
@@ -456,9 +353,8 @@ const Login = () => {
               </p>
 
               {isSignUp && !showSignupOtpInput && (
-                <LearnerGoogleButton
-                  key="google-signup"
-                  context="signup"
+                <LearnerGoogleSignIn
+                  mode="signup"
                   onCredential={(c) => void completeGoogleSignIn(c, "signup")}
                   onError={() => triggerToast("Google sign-in was cancelled or failed.", "error")}
                 />
