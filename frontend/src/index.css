@@ -636,3 +636,22 @@ label.block,
 .shadow-2xl {
   box-shadow: 0 20px 50px -24px oklch(5% 0.02 270 / 0.8) !important;
 }
+
+/* Google Identity: keep clickable hit-area invisible so GIS white iframe chrome never shows */
+.cv-google-login {
+  color-scheme: dark;
+}
+.cv-google-login__hit,
+.cv-google-login__hit > div,
+.cv-google-login__hit iframe {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+.cv-google-login__hit iframe {
+  opacity: 0.011;
+  cursor: pointer;
+}
