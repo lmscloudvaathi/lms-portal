@@ -8,6 +8,8 @@ import API_BASE_URL from './config';
 import { runTestCasesLocally } from './utils/pyodideEnv';
 import { CODE_TEMPLATES } from './utils/codeTemplates';
 import { downloadCertificatePdf } from './utils/certificates';
+import { loadRazorpayScript } from './utils/loadRazorpay';
+import { loadJetBrainsMonoFont } from './utils/loadFonts';
 import ThumbnailPicker from "./components/ThumbnailPicker";
 import {
     PlayCircle, FileText, ChevronLeft, Menu, Code, HelpCircle,
@@ -1240,6 +1242,12 @@ const CoursePlayer = () => {
                 return;
             }
 
+            const isLoaded = await loadRazorpayScript();
+            if (!isLoaded) {
+                triggerToast("Unable to load payment gateway. Please try again.", "error");
+                return;
+            }
+
             // ✅ 2. Create order for this exact course (amount comes from backend)
             const { data } = await axios.post(
                 orderUrl,
@@ -1332,6 +1340,10 @@ const CoursePlayer = () => {
             return () => clearTimeout(timer);
         }
     }, [activeLesson?.id]);
+
+    useEffect(() => {
+        if (activeLesson?.type === "code_test") loadJetBrainsMonoFont();
+    }, [activeLesson?.type]);
 
     const toggleModule = (moduleId: number) => setExpandedModules(prev => prev.includes(moduleId) ? prev.filter(id => id !== moduleId) : [...prev, moduleId]);
 

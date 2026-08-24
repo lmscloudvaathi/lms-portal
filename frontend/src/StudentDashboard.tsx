@@ -25,6 +25,8 @@ import { CODE_TEMPLATES } from './utils/codeTemplates';
 import { clearSession, getValidSession, isStudentSession } from "./utils/session";
 import { categoryLabel, groupCoursesByCategory, resolveCourseCategory, type CourseCategoryId } from "./utils/courseCategories";
 import { certificateVerifyPath, downloadCertificatePdf } from "./utils/certificates";
+import { loadRazorpayScript } from "./utils/loadRazorpay";
+import { loadJetBrainsMonoFont } from "./utils/loadFonts";
 
 // --- TYPES ---
 interface Course {
@@ -46,17 +48,6 @@ interface Course {
 }
 
 interface CodeTest { id: number; title: string; time_limit: number; problems: any[]; completed?: boolean; }
-
-// --- RAZORPAY SCRIPT LOADER ---
-const loadRazorpayScript = () => {
-    return new Promise((resolve) => {
-        const script = document.createElement("script");
-        script.src = "https://checkout.razorpay.com/v1/checkout.js";
-        script.onload = () => resolve(true);
-        script.onerror = () => resolve(false);
-        document.body.appendChild(script);
-    });
-};
 
 // --- 🟢 HELPER COMPONENTS ---
 
@@ -359,6 +350,10 @@ const StudentDashboard = () => {
 
     activeTestRef.current = activeTest;
     timeLeftRef.current = timeLeft;
+
+    useEffect(() => {
+        if (activeTest) loadJetBrainsMonoFont();
+    }, [activeTest]);
 
     // ✅ Toast Helper
     const triggerToast = (message: string, type: "success" | "error" = "success") => {

@@ -314,23 +314,25 @@ const Dashboard = () => {
       </div>
 
       {/* --- STUDENT MODAL: PLAY LIVE STREAM --- */}
-      <Modal open={showPlayerModal && !!activeSession} onClose={() => setShowPlayerModal(false)}>
-        <div className="w-full max-w-5xl flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
-          <div className="w-full max-w-5xl bg-black rounded-2xl overflow-hidden relative shadow-2xl border border-slate-800">
-            <button onClick={() => setShowPlayerModal(false)} className="absolute top-4 right-4 text-white hover:text-red-500 z-10"><X size={32} /></button>
-            <div className="relative pt-[56.25%]">
-              <iframe
-                className="absolute top-0 left-0 w-full h-full"
-                src={`https://www.youtube.com/embed/${getYoutubeId(activeSession!.youtube_url)}?autoplay=1`}
-                title="Live Class"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-              ></iframe>
+      {activeSession && (
+        <Modal open={showPlayerModal} onClose={() => setShowPlayerModal(false)}>
+          <div className="w-full max-w-5xl flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
+            <div className="w-full max-w-5xl bg-black rounded-2xl overflow-hidden relative shadow-2xl border border-slate-800">
+              <button onClick={() => setShowPlayerModal(false)} className="absolute top-4 right-4 text-white hover:text-red-500 z-10"><X size={32} /></button>
+              <div className="relative pt-[56.25%]">
+                <iframe
+                  className="absolute top-0 left-0 w-full h-full"
+                  src={`https://www.youtube.com/embed/${getYoutubeId(activeSession.youtube_url ?? "")}?autoplay=1`}
+                  title="Live Class"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                ></iframe>
+              </div>
             </div>
+            <h2 className="text-white text-2xl font-bold mt-4">{activeSession.topic}</h2>
           </div>
-          <h2 className="text-white text-2xl font-bold mt-4">{activeSession!.topic}</h2>
-        </div>
-      </Modal>
+        </Modal>
+      )}
 
     </motion.div>
   );

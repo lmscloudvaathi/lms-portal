@@ -1,3 +1,5 @@
+import { loadScript } from "./loadScript";
+import { loadJetBrainsMonoFont } from "./loadFonts";
 
 declare global {
     interface Window {
@@ -6,6 +8,17 @@ declare global {
 }
 
 let pyodideInstance: any = null;
+let pyodideScriptPromise: Promise<void> | null = null;
+
+const PYODIDE_SRC = "https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js";
+
+function ensurePyodideScript(): Promise<void> {
+    if (window.loadPyodide) return Promise.resolve();
+    if (!pyodideScriptPromise) {
+        pyodideScriptPromise = loadScript(PYODIDE_SRC, "cv-pyodide");
+    }
+    return pyodideScriptPromise;
+}
 
 interface PyodideResult {
     success: boolean;
@@ -18,10 +31,10 @@ interface PyodideResult {
 // 🟢 INITIALIZE PYODIDE
 const initPyodide = async () => {
     if (!pyodideInstance) {
+        loadJetBrainsMonoFont();
+        await ensurePyodideScript();
         if (!window.loadPyodide) {
-            console.warn("Pyodide script not found, waiting...");
-            // Optional: You could load script dynamically here if needed
-            if (!window.loadPyodide) throw new Error("Pyodide library not found. Please refresh.");
+            throw new Error("Pyodide library not found. Please refresh.");
         }
         console.log("Initializing Pyodide...");
         pyodideInstance = await window.loadPyodide();

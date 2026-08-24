@@ -10,6 +10,10 @@ export default defineConfig(({ mode }) => {
   loadEnv(mode, __dirname, '')
   return {
     plugins: [react()],
+    build: {
+      // Avoid modulepreload hints for chunks not used on first paint (console warning).
+      modulePreload: false,
+    },
     server: {
       port: 5173,
       hmr: {

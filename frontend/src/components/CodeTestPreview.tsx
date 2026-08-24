@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import axios from "axios";
 import API_BASE_URL from '../config';
 import { runTestCasesLocally } from '../utils/pyodideEnv';
+import { loadJetBrainsMonoFont } from '../utils/loadFonts';
 import { CODE_TEMPLATES } from '../utils/codeTemplates';
 
 import {
@@ -28,6 +29,10 @@ export const CodeTestPreview = ({ lesson }: { lesson: any }) => {
   const [toast, setToast] = useState<{ show: boolean; message: string; type: "success" | "error" }>({
     show: false, message: "", type: "success"
   });
+
+  useEffect(() => {
+    loadJetBrainsMonoFont();
+  }, []);
 
   // Toast Helper Function
   const triggerToast = (message: string, type: "success" | "error" = "success") => {

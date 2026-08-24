@@ -1,4 +1,4 @@
-import { useEffect, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 type ModalProps = {
@@ -10,6 +10,24 @@ type ModalProps = {
   closeOnBackdrop?: boolean;
 };
 
+let scrollLockCount = 0;
+let savedBodyOverflow = "";
+
+function lockBodyScroll() {
+  if (scrollLockCount === 0) {
+    savedBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+  }
+  scrollLockCount += 1;
+}
+
+function unlockBodyScroll() {
+  scrollLockCount = Math.max(0, scrollLockCount - 1);
+  if (scrollLockCount === 0) {
+    document.body.style.overflow = savedBodyOverflow;
+  }
+}
+
 export default function Modal({
   open,
   onClose,
@@ -18,19 +36,21 @@ export default function Modal({
   overlayStyle,
   closeOnBackdrop = true,
 }: ModalProps) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    lockBodyScroll();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onCloseRef.current();
     };
     document.addEventListener("keydown", onKey);
     return () => {
-      document.body.style.overflow = prev;
       document.removeEventListener("keydown", onKey);
+      unlockBodyScroll();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

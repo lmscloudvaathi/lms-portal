@@ -489,6 +489,7 @@ const CoursePreview = () => {
 
       {/* EDIT ITEM MODAL */}
       <Modal open={!!editingItem} onClose={() => setEditingItem(null)}>
+          {editingItem && (
           <div style={{ background: brand.cardBg, padding: "30px", borderRadius: "16px", width: "560px", maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)" }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ marginTop: 0, color: brand.textMain, fontWeight: "800", fontSize: "18px" }}>Edit Content</h3>
             <div style={{ marginBottom: "15px" }}>
@@ -545,6 +546,7 @@ const CoursePreview = () => {
               <button onClick={() => setEditingItem(null)} style={{ flex: 1, padding: "10px", background: "white", color: brand.textLight, border: `1px solid ${brand.border}`, borderRadius: "8px", fontWeight: "700", cursor: "pointer" }}>Cancel</button>
             </div>
           </div>
+          )}
       </Modal>
 
       <CvToast
