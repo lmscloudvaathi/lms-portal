@@ -1,10 +1,11 @@
-import { Link } from "react-router-dom";
+const MARKETING_ORIGIN = "https://cloudvaathi.in";
 
-const LOCAL_NAV = {
-  home: "/",
-  events: "/",
-  testimonials: "/",
-};
+const NAV = {
+  home: `${MARKETING_ORIGIN}/`,
+  events: `${MARKETING_ORIGIN}/#events`,
+  testimonials: `${MARKETING_ORIGIN}/#testimonials`,
+  lms: "/",
+} as const;
 
 export default function SiteFooter() {
   return (
@@ -27,10 +28,10 @@ export default function SiteFooter() {
         <div>
           <h4 className="font-display text-sm font-semibold uppercase tracking-wider text-muted-foreground">Explore</h4>
           <ul className="mt-4 space-y-2 text-sm">
-            <li><Link className="hover:text-primary" to={LOCAL_NAV.home}>Home</Link></li>
-            <li><Link className="hover:text-primary" to={LOCAL_NAV.events}>Courses &amp; events</Link></li>
-            <li><Link className="hover:text-primary" to="/">LMS</Link></li>
-            <li><Link className="hover:text-primary" to={LOCAL_NAV.testimonials}>Testimonials</Link></li>
+            <li><a className="hover:text-primary" href={NAV.home}>Home</a></li>
+            <li><a className="hover:text-primary" href={NAV.events}>Courses &amp; events</a></li>
+            <li><a className="hover:text-primary" href={NAV.lms}>LMS</a></li>
+            <li><a className="hover:text-primary" href={NAV.testimonials}>Testimonials</a></li>
           </ul>
         </div>
         <div>

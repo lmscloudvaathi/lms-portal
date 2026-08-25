@@ -6,6 +6,8 @@
     <link rel="apple-touch-icon" href="/CloudVaathiLogo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Engineer the cloud generation. Live cohorts, certification prep, and a full LMS for structured learning." />
+    <!-- Required for Google Identity Services on http://localhost (origin must be sent as Referer). -->
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
     <title>Cloud Vaathi — Learn, Certify, Transform</title>
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -14,7 +16,7 @@
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap"
     />
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="https://accounts.google.com/gsi/client" referrerpolicy="strict-origin-when-cross-origin" async defer></script>
   </head>
   <body>
     <div id="root"></div>

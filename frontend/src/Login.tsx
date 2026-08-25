@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { GoogleLogin } from "@react-oauth/google";
 import axios from "axios";
@@ -41,15 +41,54 @@ function apiErrorMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
+/** Same Continue-with-Google control for Sign In and Create Account. */
 function LearnerGoogleSignIn({
   mode,
   onCredential,
   onError,
+  active,
 }: {
   mode: "login" | "signup";
   onCredential: (credential: string | undefined) => void;
   onError: () => void;
+  /** Only mount GIS after the panel is visible (avoids blank button on Create Account). */
+  active: boolean;
 }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [ready, setReady] = useState(false);
+  const [mountKey, setMountKey] = useState(0);
+
+  useEffect(() => {
+    if (!active || !GOOGLE_CLIENT_ID) {
+      setReady(false);
+      return;
+    }
+
+    let cancelled = false;
+    let attempts = 0;
+    let timer = 0;
+
+    const tryReady = () => {
+      if (cancelled) return;
+      const width = wrapRef.current?.getBoundingClientRect().width ?? 0;
+      // Wait until the Create Account / Login panel has real layout width.
+      if (width < 200) {
+        if (attempts++ < 40) timer = window.setTimeout(tryReady, 80);
+        return;
+      }
+      setMountKey((k) => k + 1);
+      setReady(true);
+    };
+
+    // Let the slide / opacity animation settle first.
+    timer = window.setTimeout(tryReady, 350);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      setReady(false);
+    };
+  }, [active, mode]);
+
   if (!GOOGLE_CLIENT_ID) {
     return (
       <p className="mx-auto mb-5 max-w-[350px] rounded-xl border border-border bg-[var(--surface-elevated)] px-4 py-3 text-xs text-muted-foreground">
@@ -59,18 +98,32 @@ function LearnerGoogleSignIn({
   }
 
   return (
-    <div className="cv-google-login-native">
-      <GoogleLogin
-        onSuccess={(response) => onCredential(response.credential)}
-        onError={onError}
-        useOneTap={false}
-        theme="filled_black"
-        size="large"
-        text="continue_with"
-        shape="rectangular"
-        width="350"
-        context={mode === "signup" ? "signup" : "signin"}
-      />
+    <div ref={wrapRef} className="cv-google-login-native">
+      {ready ? (
+        <GoogleLogin
+          key={`google-${mode}-${mountKey}`}
+          onSuccess={(response) => onCredential(response.credential)}
+          onError={onError}
+          useOneTap={false}
+          theme="filled_black"
+          size="large"
+          text="continue_with"
+          shape="rectangular"
+          width="350"
+          context={mode === "signup" ? "signup" : "signin"}
+        />
+      ) : (
+        <div
+          className="flex h-11 w-full max-w-[350px] items-center justify-center rounded-xl border text-sm font-semibold text-muted-foreground"
+          style={{
+            background: "var(--surface-elevated)",
+            borderColor: "color-mix(in oklab, var(--neon-cyan) 28%, var(--border))",
+          }}
+          aria-hidden
+        >
+          Continue with Google
+        </div>
+      )}
     </div>
   );
 }
@@ -240,6 +293,8 @@ const Login = () => {
     }
   };
 
+  const googleError = () => triggerToast("Google sign-in was cancelled or failed.", "error");
+
   return (
     <div className="relative min-h-screen flex flex-col font-sans">
       <SiteHeader
@@ -273,15 +328,14 @@ const Login = () => {
             <h1 className="mb-1 text-2xl font-bold text-foreground">Learner Login</h1>
             <p className="mb-4 text-sm text-muted-foreground">Sign in with Google or email and password</p>
 
-            {!isSignUp && (
-              <LearnerGoogleSignIn
-                mode="login"
-                onCredential={(c) => void completeGoogleSignIn(c, "login")}
-                onError={() => triggerToast("Google sign-in was cancelled or failed.", "error")}
-              />
-            )}
+            <LearnerGoogleSignIn
+              mode="login"
+              active={!isSignUp}
+              onCredential={(c) => void completeGoogleSignIn(c, "login")}
+              onError={googleError}
+            />
 
-            <div className="mb-6 flex w-full items-center">
+            <div className="mb-6 flex w-full max-w-[350px] items-center">
               <div className="h-px flex-1 bg-border"></div>
               <span className="px-3 text-xs font-medium text-muted-foreground">OR USE EMAIL</span>
               <div className="h-px flex-1 bg-border"></div>
@@ -347,22 +401,24 @@ const Login = () => {
               onSubmit={handleAuth}
               className="bg-transparent flex flex-col items-center justify-center w-full h-full px-8 py-10 lg:px-12 text-center"
             >
-              <h1 className={`mb-2 text-3xl font-bold ${activeText}`}>Create Account</h1>
-              <p className="mb-3 max-w-[350px] text-sm text-muted-foreground">
-                Register with Google (instant), or use email—we&apos;ll send a verification code.
+              <div className="mb-4 lg:hidden">
+                <BrandLogo size="xl" showTagline />
+              </div>
+              <h1 className={`mb-1 text-2xl font-bold text-foreground lg:mb-2 lg:text-3xl ${activeText}`}>Create Account</h1>
+              <p className="mb-4 max-w-[350px] text-sm text-muted-foreground">
+                Sign up with Google or email and password
               </p>
 
-              {isSignUp && !showSignupOtpInput && (
-                <LearnerGoogleSignIn
-                  mode="signup"
-                  onCredential={(c) => void completeGoogleSignIn(c, "signup")}
-                  onError={() => triggerToast("Google sign-in was cancelled or failed.", "error")}
-                />
-              )}
+              <LearnerGoogleSignIn
+                mode="signup"
+                active={isSignUp && !showSignupOtpInput}
+                onCredential={(c) => void completeGoogleSignIn(c, "signup")}
+                onError={googleError}
+              />
 
-              <div className="mx-auto mb-5 flex w-full max-w-[350px] items-center">
+              <div className="mb-6 flex w-full max-w-[350px] items-center">
                 <div className="h-px flex-1 bg-border" />
-                <span className="px-3 text-xs font-medium text-muted-foreground">OR EMAIL</span>
+                <span className="px-3 text-xs font-medium text-muted-foreground">OR USE EMAIL</span>
                 <div className="h-px flex-1 bg-border" />
               </div>
 

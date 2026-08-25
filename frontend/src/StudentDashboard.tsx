@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from "react";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import Editor from "@monaco-editor/react";
@@ -19,8 +19,9 @@ import * as blazeface from "@tensorflow-models/blazeface";
 import "@tensorflow/tfjs-backend-webgl";
 import BrandLogo from "./components/BrandLogo";
 import ProfileMenu from "./components/ProfileMenu";
-import Modal from "./components/Modal";
+import Modal, { forceUnlockBodyScroll } from "./components/Modal";
 import CvToast, { ToastPortal } from "./components/CvToast";
+import { useEdgeSwipe } from "./hooks/useEdgeSwipe";
 import { CODE_TEMPLATES } from './utils/codeTemplates';
 import { clearSession, getValidSession, isStudentSession } from "./utils/session";
 import { categoryLabel, groupCoursesByCategory, resolveCourseCategory, type CourseCategoryId } from "./utils/courseCategories";
@@ -51,8 +52,34 @@ interface CodeTest { id: number; title: string; time_limit: number; problems: an
 
 // --- 🟢 HELPER COMPONENTS ---
 
+const SideNavItem = ({
+    icon,
+    label,
+    active,
+    onClick,
+}: {
+    icon: ReactNode;
+    label: string;
+    active: boolean;
+    onClick: () => void;
+}) => (
+    <button
+        type="button"
+        onClick={onClick}
+        className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-3 text-left text-[15px] font-bold transition-all ${
+            active
+                ? "bg-input text-primary shadow-sm"
+                : "text-muted-foreground hover:bg-white/5 hover:text-foreground"
+        }`}
+    >
+        <span className="shrink-0">{icon}</span>
+        <span className="truncate">{label}</span>
+    </button>
+);
+
 const NavItem = ({ icon, label, active, onClick }: any) => (
     <button
+        type="button"
         onClick={onClick}
         className={`flex items-center gap-2 px-4 py-2 rounded-full transition-all text-sm font-bold ${active
             ? "bg-secondary text-primary"
@@ -269,6 +296,14 @@ const StudentDashboard = () => {
     const RAZORPAY_PAYLINK_URL = import.meta.env.VITE_RAZORPAY_PAYLINK_URL;
     const [activeTab, setActiveTab] = useState("home");
 
+    const switchTab = (tab: string) => {
+        forceUnlockBodyScroll();
+        setShowModal(false);
+        setShowPassKeyModal(null);
+        setIsMobileMenuOpen(false);
+        setActiveTab(tab);
+    };
+
     // ✅ NEW: Sub-tab for My Learning (Standard vs Coding)
     const [learningSubTab, setLearningSubTab] = useState("standard");
     const [exploreCategory, setExploreCategory] = useState<"all" | CourseCategoryId>("all");
@@ -277,12 +312,10 @@ const StudentDashboard = () => {
     const [enrolledCourses, setEnrolledCourses] = useState<Course[]>([]);
     const [loading, setLoading] = useState(true);
     const [progressMap, setProgressMap] = useState<{ [key: number]: { percent: number, completed: number, total: number } }>({});
-    const [collapsed, setCollapsed] = useState(false);
     const [notifications, setNotifications] = useState<any[]>([]);
     const [unreadCount, setUnreadCount] = useState(0);
     const [studentProfile, setStudentProfile] = useState({ name: "Loading...", email: "..." });
     const [newPassword, setNewPassword] = useState("");
-    // ✅ MOVED: Mobile Menu State (Must be before conditional returns)
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     // Modal & Settings
     const [showModal, setShowModal] = useState(false);
@@ -297,6 +330,25 @@ const StudentDashboard = () => {
     const [activeTest, setActiveTest] = useState<CodeTest | null>(null);
     const [passKeyInput, setPassKeyInput] = useState("");
     const [showPassKeyModal, setShowPassKeyModal] = useState<number | null>(null);
+
+    const openMobileMenu = useCallback(() => setIsMobileMenuOpen(true), []);
+    const closeMobileMenu = useCallback(() => setIsMobileMenuOpen(false), []);
+
+    useEdgeSwipe({
+        enabled: !activeTest,
+        open: isMobileMenuOpen,
+        onOpen: openMobileMenu,
+        onClose: closeMobileMenu,
+    });
+
+    useEffect(() => {
+        if (!isMobileMenuOpen) return;
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        return () => {
+            document.body.style.overflow = prev;
+        };
+    }, [isMobileMenuOpen]);
 
     // --- 🛡️ PROCTORING STATES ---
     const [timeLeft, setTimeLeft] = useState(0);
@@ -1209,32 +1261,41 @@ const StudentDashboard = () => {
         <div className="min-h-screen bg-transparent font-sans">
 
             {/* 1. HEADER BAR */}
-            <header className="glass border-b border-border/50 px-4 lg:px-8 py-4 flex justify-between items-center sticky top-0 z-50">
+            <header className="glass border-b border-border/50 px-4 lg:px-8 py-3 sm:py-4 flex justify-between items-center sticky top-0 z-50 relative">
 
                 {/* Left: Logo & Mobile Toggle */}
-                <div className="flex items-center gap-4">
-                    <button onClick={() => setIsMobileMenuOpen(true)} className="lg:hidden text-slate-600 hover:text-[#005EB8]">
+                <div className="flex min-w-0 items-center gap-3">
+                    <button
+                        type="button"
+                        onClick={openMobileMenu}
+                        className="rounded-lg p-2 text-muted-foreground hover:bg-white/10 lg:hidden"
+                        aria-label="Open sections"
+                    >
                         <Menu size={24} />
                     </button>
-                    <BrandLogo size="md" showTagline />
+                    <div className="min-w-0">
+                        <BrandLogo size="md" showTagline />
+                        <p className="mt-0.5 text-[11px] font-medium text-muted-foreground lg:hidden">
+                            Sections · swipe from left
+                        </p>
+                    </div>
                 </div>
 
                 {/* Center: Desktop Navigation Menu */}
                 <nav className="hidden lg:flex items-center gap-2">
-                    <NavItem icon={<LayoutDashboard size={18} />} label="Home" active={activeTab === "home"} onClick={() => setActiveTab("home")} />
-                    <NavItem icon={<BookOpen size={18} />} label="My Learning" active={activeTab === "learning"} onClick={() => setActiveTab("learning")} />
-                    <NavItem icon={<Code size={18} />} label="Code Test" active={activeTab === "test"} onClick={() => setActiveTab("test")} />
-                    <NavItem icon={<Compass size={18} />} label="Explore" active={activeTab === "explore"} onClick={() => setActiveTab("explore")} />
-                    <NavItem icon={<Award size={18} />} label="Certificates" active={activeTab === "certificates"} onClick={() => setActiveTab("certificates")} />
+                    <NavItem icon={<LayoutDashboard size={18} />} label="Home" active={activeTab === "home"} onClick={() => switchTab("home")} />
+                    <NavItem icon={<BookOpen size={18} />} label="My Learning" active={activeTab === "learning"} onClick={() => switchTab("learning")} />
+                    <NavItem icon={<Code size={18} />} label="Code Test" active={activeTab === "test"} onClick={() => switchTab("test")} />
+                    <NavItem icon={<Compass size={18} />} label="Explore" active={activeTab === "explore"} onClick={() => switchTab("explore")} />
+                    <NavItem icon={<Award size={18} />} label="Certificates" active={activeTab === "certificates"} onClick={() => switchTab("certificates")} />
                 </nav>
 
                 {/* Right: Actions (Notification & Profile) */}
                 <div className="flex items-center gap-2 lg:gap-4">
-
-                    {/* Notification Bell */}
                     <button
+                        type="button"
                         onClick={() => {
-                            setActiveTab("notifications");
+                            switchTab("notifications");
                             setUnreadCount(0);
                             axios.patch(`${API_BASE_URL}/notifications/read`, {}, { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } });
                         }}
@@ -1247,54 +1308,76 @@ const StudentDashboard = () => {
                     <ProfileMenu
                         name={studentProfile.name}
                         email={studentProfile.email}
-                        onSettings={() => setActiveTab("settings")}
+                        onSettings={() => switchTab("settings")}
                         onSignOut={handleLogout}
                         signOutLabel="Logout"
                     >
                         <User size={18} className="lg:w-5 lg:h-5" />
                     </ProfileMenu>
-
-                    {/* Mobile Menu Toggle (Visible on small screens) */}
-                    <button className="md:hidden p-2 text-slate-600" onClick={() => setCollapsed(!collapsed)}>
-                        <Menu size={24} />
-                    </button>
                 </div>
             </header>
 
-            {/* 2. MOBILE MENU OVERLAY */}
+            {/* Edge swipe hint (mobile) */}
+            {!isMobileMenuOpen && (
+                <div
+                    aria-hidden
+                    className="pointer-events-none fixed left-0 top-1/2 z-40 h-24 w-1.5 -translate-y-1/2 rounded-r-full bg-primary/40 lg:hidden"
+                />
+            )}
+
+            {/* 2. MOBILE SIDE SECTIONS (swipe or menu) */}
             {isMobileMenuOpen && (
                 <div className="fixed inset-0 z-[60] lg:hidden">
-                    {/* Backdrop */}
-                    <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setIsMobileMenuOpen(false)}></div>
+                    <button
+                        type="button"
+                        aria-label="Close sections"
+                        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+                        onClick={closeMobileMenu}
+                    />
 
-                    {/* Sidebar */}
-                    <motion.div
-                        initial={{ x: -300 }}
+                    <motion.aside
+                        initial={{ x: -320 }}
                         animate={{ x: 0 }}
-                        exit={{ x: -300 }}
-                        className="absolute left-0 top-0 h-full w-64 bg-white shadow-2xl p-6 flex flex-col gap-6"
+                        transition={{ type: "spring", stiffness: 320, damping: 32 }}
+                        className="absolute left-0 top-0 flex h-full w-[min(18rem,86vw)] flex-col border-r border-border/50 glass p-5 shadow-2xl"
+                        aria-label="Sections"
                     >
-                        <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-                            <span className="text-xl font-extrabold text-[#005EB8]">Cloud<span className="text-[#87C232]">Vaathi Pro</span></span>
-                            <button onClick={() => setIsMobileMenuOpen(false)} className="text-slate-400 hover:text-slate-600">
-                                <X size={24} />
+                        <div className="mb-5 flex items-center justify-between border-b border-border pb-4">
+                            <div>
+                                <BrandLogo size="sm" />
+                                <p className="mt-1 text-[11px] font-bold uppercase tracking-widest text-primary">Student</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={closeMobileMenu}
+                                className="rounded-lg p-2 text-muted-foreground hover:bg-white/10"
+                                aria-label="Close"
+                            >
+                                <X size={22} />
                             </button>
                         </div>
 
-                        <nav className="flex flex-col gap-2">
-                            <NavItem icon={<LayoutDashboard size={20} />} label="Home" active={activeTab === "home"} onClick={() => { setActiveTab("home"); setIsMobileMenuOpen(false); }} />
-                            <NavItem icon={<BookOpen size={20} />} label="My Learning" active={activeTab === "learning"} onClick={() => { setActiveTab("learning"); setIsMobileMenuOpen(false); }} />
-                            <NavItem icon={<Code size={20} />} label="Code Test" active={activeTab === "test"} onClick={() => { setActiveTab("test"); setIsMobileMenuOpen(false); }} />
-                            <NavItem icon={<Compass size={20} />} label="Explore" active={activeTab === "explore"} onClick={() => { setActiveTab("explore"); setIsMobileMenuOpen(false); }} />
-                            <NavItem icon={<Award size={20} />} label="Certificates" active={activeTab === "certificates"} onClick={() => { setActiveTab("certificates"); setIsMobileMenuOpen(false); }} />
+                        <nav className="flex flex-1 flex-col gap-1.5 overflow-y-auto">
+                            <SideNavItem icon={<LayoutDashboard size={20} />} label="Home" active={activeTab === "home"} onClick={() => switchTab("home")} />
+                            <SideNavItem icon={<BookOpen size={20} />} label="My Learning" active={activeTab === "learning"} onClick={() => switchTab("learning")} />
+                            <SideNavItem icon={<Code size={20} />} label="Code Test" active={activeTab === "test"} onClick={() => switchTab("test")} />
+                            <SideNavItem icon={<Compass size={20} />} label="Explore" active={activeTab === "explore"} onClick={() => switchTab("explore")} />
+                            <SideNavItem icon={<Award size={20} />} label="Certificates" active={activeTab === "certificates"} onClick={() => switchTab("certificates")} />
+                            <SideNavItem icon={<BellRing size={20} />} label="Notifications" active={activeTab === "notifications"} onClick={() => switchTab("notifications")} />
+                            <SideNavItem icon={<User size={20} />} label="Settings" active={activeTab === "settings"} onClick={() => switchTab("settings")} />
                         </nav>
 
-                        <div className="mt-auto border-t border-slate-100 pt-4">
-                            <button onClick={handleLogout} className="flex items-center gap-3 w-full p-2 rounded-lg text-red-500 hover:bg-red-50 text-sm font-bold transition-colors">
-                                <LogOut size={20} /> Logout
+                        <div className="mt-4 border-t border-border pt-4">
+                            <button
+                                type="button"
+                                onClick={handleLogout}
+                                className="flex w-full items-center gap-3 rounded-xl p-3 text-sm font-bold text-red-400 transition-colors hover:bg-red-500/10"
+                            >
+                                <LogOut size={20} /> Sign Out
                             </button>
+                            <p className="mt-3 text-center text-[11px] text-muted-foreground">Swipe left to close</p>
                         </div>
-                    </motion.div>
+                    </motion.aside>
                 </div>
             )}
 

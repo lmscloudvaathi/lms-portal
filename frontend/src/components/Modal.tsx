@@ -24,8 +24,15 @@ function lockBodyScroll() {
 function unlockBodyScroll() {
   scrollLockCount = Math.max(0, scrollLockCount - 1);
   if (scrollLockCount === 0) {
-    document.body.style.overflow = savedBodyOverflow;
+    document.body.style.overflow = savedBodyOverflow || "";
   }
+}
+
+/** Force-clear body lock if count gets stuck (e.g. after route change). */
+export function forceUnlockBodyScroll() {
+  scrollLockCount = 0;
+  document.body.style.overflow = "";
+  document.body.style.pointerEvents = "";
 }
 
 export default function Modal({
@@ -38,17 +45,29 @@ export default function Modal({
 }: ModalProps) {
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const lockedRef = useRef(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      if (lockedRef.current) {
+        unlockBodyScroll();
+        lockedRef.current = false;
+      }
+      return;
+    }
+
     lockBodyScroll();
+    lockedRef.current = true;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onCloseRef.current();
     };
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
-      unlockBodyScroll();
+      if (lockedRef.current) {
+        unlockBodyScroll();
+        lockedRef.current = false;
+      }
     };
   }, [open]);
 
@@ -59,7 +78,8 @@ export default function Modal({
       className={`cv-modal-overlay ${overlayClassName}`.trim()}
       style={overlayStyle}
       onClick={closeOnBackdrop ? onClose : undefined}
-      role="presentation"
+      role="dialog"
+      aria-modal="true"
     >
       {children}
     </div>,

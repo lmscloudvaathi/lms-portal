@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { GoogleOAuthProvider } from "@react-oauth/google";
 import axios from "axios";
 import { FileText, PlusCircle, BookOpen, Trash2, X, Pencil, Image as ImageIcon } from "lucide-react";
@@ -25,9 +25,22 @@ import CodingCourseManager from "./CodingCourseManager";
 import { clearSession, getValidSession } from "./utils/session";
 import ThemeBackdrop from "./components/ThemeBackdrop";
 import ThumbnailPicker from "./components/ThumbnailPicker";
-import Modal from "./components/Modal";
+import Modal, { forceUnlockBodyScroll } from "./components/Modal";
 import CvToast from "./components/CvToast";
 import { COURSE_CATEGORY_OPTIONS } from "./utils/courseCategories";
+
+function RouteInteractionCleanup() {
+  const location = useLocation();
+  useEffect(() => {
+    forceUnlockBodyScroll();
+    try {
+      (window as Window & { google?: { accounts?: { id?: { cancel?: () => void } } } }).google?.accounts?.id?.cancel?.();
+    } catch {
+      /* ignore */
+    }
+  }, [location.pathname]);
+  return null;
+}
 
 type AdminCourse = {
   id: number;
@@ -348,6 +361,7 @@ const CourseList = () => {
 function App() {
   const routes = (
     <Router>
+      <RouteInteractionCleanup />
       <ThemeBackdrop />
       <Routes>
         <Route path="/" element={<PublicOnlyRoute><Login /></PublicOnlyRoute>} />
