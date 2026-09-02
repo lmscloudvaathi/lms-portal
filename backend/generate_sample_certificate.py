@@ -8,6 +8,7 @@ from pathlib import Path
 import models
 from certificate_copy import build_course_body, format_recipient_name
 from certificate_course_codes import build_certificate_prefix, resolve_course_certificate_code
+from certificate_id import format_certificate_id
 from certificate_html import build_certificate_html
 from pdf_certificate import close_shared_browser, generate_certificate_pdf_with_browser
 
@@ -23,7 +24,7 @@ async def main() -> None:
     )
     code = resolve_course_certificate_code(course)
     prefix = build_certificate_prefix(course)
-    credential_id = f"{prefix}-731"
+    credential_id = format_certificate_id(prefix, 731)
     recipient = format_recipient_name("Jagathishwaran Parthiban", "learner@cloudvaathi.in")
     body = build_course_body(
         title=course.title,
