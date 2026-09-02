@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -13,6 +14,8 @@ from certificate_copy import build_course_body, default_body_text, format_recipi
 from certificate_email import send_certificate_email, verify_url
 from certificate_id import allocate_credential_id
 from pdf_certificate import GENERATED_DIR, generate_certificate_pdf_with_browser
+
+logger = logging.getLogger(__name__)
 
 
 def serialize_certificate(cert: models.UserCertificate, course_title: Optional[str] = None) -> Dict[str, Any]:
@@ -136,6 +139,27 @@ def _pdf_path_for(cert: models.UserCertificate) -> Path:
     return GENERATED_DIR / f"{cert.certificate_id}.pdf"
 
 
+def _pdf_is_ready(path: Path) -> bool:
+    try:
+        return path.exists() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _needs_pdf_generation(cert: models.UserCertificate, pdf_path: Path, *, created: bool, refresh_pdf: bool) -> bool:
+    if created or refresh_pdf:
+        return True
+    if not _pdf_is_ready(pdf_path):
+        return True
+    return (cert.status or "").upper() == "FAILED"
+
+
+def _needs_email_send(cert: models.UserCertificate, user: models.User, *, send_email: bool) -> bool:
+    if not send_email or not user.email:
+        return False
+    return (cert.email_status or "PENDING") not in ("SENT", "SKIPPED")
+
+
 async def render_certificate_pdf(
     db: AsyncSession,
     cert: models.UserCertificate,
@@ -188,7 +212,7 @@ async def email_certificate_if_configured(
         )
         cert.email_status = "SENT"
     except Exception as exc:
-        print(f"Certificate email failed: {exc}")
+        logger.exception("Certificate email failed for %s: %s", cert.certificate_id, exc)
         cert.email_status = "FAILED"
     await db.commit()
 
@@ -213,7 +237,7 @@ async def issue_certificate_if_eligible(
     created = False
     refresh_pdf = False
     if not cert:
-        credential_id = await allocate_credential_id(db)
+        credential_id = await allocate_credential_id(db, course=course)
         completed_at = await course_completed_at(db, user.id, course)
         duration_minutes = await course_duration_minutes(db, course)
         cert = models.UserCertificate(
@@ -230,7 +254,7 @@ async def issue_certificate_if_eligible(
         db.add(models.Notification(
             user_id=user.id,
             title="Certificate issued",
-            message=f"You earned a certificate for {course.title}. CERTIFICATION ID : {credential_id}",
+            message=f"Your Cloudvaathi certificate for {course.title} is ready. CERTIFICATION ID : {credential_id}",
             created_at=datetime.utcnow(),
         ))
         await db.commit()
@@ -246,15 +270,25 @@ async def issue_certificate_if_eligible(
         refresh_pdf = True
 
     pdf_path = _pdf_path_for(cert)
-    if generate_pdf and (created or refresh_pdf or not pdf_path.exists()):
+    should_generate_pdf = generate_pdf and _needs_pdf_generation(
+        cert, pdf_path, created=created, refresh_pdf=refresh_pdf
+    )
+    should_send_email = _needs_email_send(cert, user, send_email=send_email)
+
+    if should_generate_pdf:
         try:
             pdf_path = await render_certificate_pdf(db, cert, user, course)
-            if send_email and cert.email_status not in ("SENT", "SKIPPED"):
+            if should_send_email:
                 await email_certificate_if_configured(db, cert, user, course, pdf_path)
         except Exception as exc:
-            print(f"Certificate PDF generation failed: {exc}")
+            logger.exception("Certificate PDF generation failed for %s: %s", cert.certificate_id, exc)
             cert.status = "FAILED"
             await db.commit()
+    elif should_send_email and _pdf_is_ready(pdf_path):
+        try:
+            await email_certificate_if_configured(db, cert, user, course, pdf_path)
+        except Exception as exc:
+            logger.exception("Certificate email retry failed for %s: %s", cert.certificate_id, exc)
     return cert
 
 
@@ -316,3 +350,10 @@ async def issue_after_challenge_solved(db: AsyncSession, user: models.User, chal
     if not course_id:
         return None
     return await issue_certificate_if_eligible(db, user, course_id)
+
+
+def certificate_response_payload(cert: Optional[models.UserCertificate]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"certificate_issued": bool(cert)}
+    if cert:
+        payload["certificate"] = serialize_certificate(cert)
+    return payload

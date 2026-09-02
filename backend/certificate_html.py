@@ -91,7 +91,7 @@ def build_certificate_html(
     background = png_as_data_uri(template_path)
 
     name = html.escape(format_recipient_name(recipient_name, email))
-    intro = html.escape("This is to certify that")
+    intro = html.escape("Cloudvaathi certifies that")
     body = markdown_bold_to_html(body_text or default_body_text(course_title))
     credential = html.escape(f"CERTIFICATION ID : {credential_id}")
     issued = html.escape(f"CERTIFICATION DATE : {format_issued_date(issued_at)}")

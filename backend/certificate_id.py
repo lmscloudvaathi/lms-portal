@@ -9,27 +9,38 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
 
 import models
+from certificate_course_codes import build_certificate_prefix, resolve_course_certificate_code
 
-START_NUMBER = 10001
+START_NUMBER = 100
 _ID_TAIL = re.compile(r"-(\d+)$")
 
 
+def certificate_id_base() -> str:
+    return (os.getenv("CERTIFICATE_ID_BASE") or os.getenv("CERTIFICATE_ID_PREFIX") or "CV").strip().upper() or "CV"
+
+
 def default_prefix() -> str:
-    return (os.getenv("CERTIFICATE_ID_PREFIX") or "CV-LMS").strip().upper().replace(" ", "-") or "CV-LMS"
+    """Legacy fallback prefix when no course context is available."""
+    base = certificate_id_base()
+    return f"{base}-GEN"
 
 
-DEFAULT_PREFIX = "CV-LMS"
+DEFAULT_PREFIX = "CV-GEN"
 
 
 def _id_number(credential_id: str, prefix: str) -> Optional[int]:
     if not credential_id:
         return None
-    match = _ID_TAIL.search(credential_id.strip().upper())
+    normalized = credential_id.strip().upper()
+    if not normalized.startswith(prefix + "-"):
+        return None
+    match = _ID_TAIL.search(normalized)
     if not match:
         return None
-    if not credential_id.strip().upper().startswith(prefix + "-"):
+    try:
+        return int(match.group(1))
+    except ValueError:
         return None
-    return int(match.group(1))
 
 
 async def _highest_issued_number(db: AsyncSession, prefix: str) -> int:
@@ -46,8 +57,17 @@ async def _highest_issued_number(db: AsyncSession, prefix: str) -> int:
     return highest
 
 
-async def allocate_credential_id(db: AsyncSession, prefix: str | None = None) -> str:
-    clean_prefix = (prefix or default_prefix()).strip().upper().replace(" ", "-")
+async def allocate_credential_id(
+    db: AsyncSession,
+    *,
+    course: Optional[models.Course] = None,
+    prefix: Optional[str] = None,
+) -> str:
+    if course is not None:
+        clean_prefix = build_certificate_prefix(course, base=certificate_id_base())
+    else:
+        clean_prefix = (prefix or default_prefix()).strip().upper().replace(" ", "-")
+
     highest = await _highest_issued_number(db, clean_prefix)
 
     result = await db.execute(
@@ -69,3 +89,14 @@ async def allocate_credential_id(db: AsyncSession, prefix: str | None = None) ->
         row.next_number = number + 1
         await db.flush()
     return f"{clean_prefix}-{number}"
+
+
+def describe_course_certificate_code(course: models.Course) -> dict[str, str]:
+    """Useful for admin/debug responses."""
+    code = resolve_course_certificate_code(course)
+    prefix = build_certificate_prefix(course, base=certificate_id_base())
+    return {
+        "course_code": code,
+        "certificate_prefix": prefix,
+        "sample_id": f"{prefix}-{START_NUMBER}",
+    }

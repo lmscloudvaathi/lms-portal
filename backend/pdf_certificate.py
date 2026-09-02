@@ -41,7 +41,13 @@ def _executable_path() -> Optional[str]:
 async def launch_headless_browser():
     from playwright.async_api import async_playwright
 
-    playwright = await async_playwright().start()
+    try:
+        playwright = await async_playwright().start()
+    except Exception as exc:
+        raise RuntimeError(
+            "Playwright is not ready for certificate PDF generation. "
+            "Run: python -m playwright install chromium"
+        ) from exc
     launch_kwargs = {
         "headless": True,
         "args": _launch_args(),
@@ -49,7 +55,14 @@ async def launch_headless_browser():
     executable = _executable_path()
     if executable:
         launch_kwargs["executable_path"] = executable
-    browser = await playwright.chromium.launch(**launch_kwargs)
+    try:
+        browser = await playwright.chromium.launch(**launch_kwargs)
+    except Exception as exc:
+        await playwright.stop()
+        raise RuntimeError(
+            "Chromium is not installed for certificate PDF generation. "
+            "Run: python -m playwright install chromium"
+        ) from exc
     browser._playwright = playwright  # type: ignore[attr-defined]
     return browser
 

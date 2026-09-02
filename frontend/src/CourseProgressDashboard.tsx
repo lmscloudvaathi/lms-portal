@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import axios from "axios";
 import { motion } from "framer-motion";
@@ -154,6 +154,7 @@ export default function CourseProgressDashboard() {
   const [error, setError] = useState("");
   const [openModules, setOpenModules] = useState<number[]>([]);
   const [claiming, setClaiming] = useState(false);
+  const autoIssueAttempted = useRef(false);
   const [toast, setToast] = useState({ show: false, message: "", type: "success" as "success" | "error" });
 
   const triggerToast = (message: string, type: "success" | "error" = "success") => {
@@ -203,8 +204,8 @@ export default function CourseProgressDashboard() {
     }
   };
 
-  const handleClaimCertificate = async () => {
-    if (!courseId) return;
+  const handleClaimCertificate = useCallback(async (options?: { silent?: boolean }) => {
+    if (!courseId) return false;
     setClaiming(true);
     try {
       const token = localStorage.getItem("token");
@@ -212,17 +213,39 @@ export default function CourseProgressDashboard() {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.data.status === "success") {
-        triggerToast("Certificate generated!", "success");
+        if (!options?.silent) {
+          triggerToast("Your Cloudvaathi certificate is ready!", "success");
+        }
         await loadDashboard();
-      } else {
+        return true;
+      }
+      if (!options?.silent) {
         triggerToast(res.data.message || "Course is not complete yet.", "error");
       }
+      return false;
     } catch {
-      triggerToast("Could not claim certificate.", "error");
+      if (!options?.silent) {
+        triggerToast("Could not issue certificate.", "error");
+      }
+      return false;
     } finally {
       setClaiming(false);
     }
-  };
+  }, [courseId, loadDashboard]);
+
+  useEffect(() => {
+    autoIssueAttempted.current = false;
+  }, [courseId]);
+
+  useEffect(() => {
+    if (!data?.certificate?.eligible || data.certificate.claimed || claiming || autoIssueAttempted.current) return;
+    autoIssueAttempted.current = true;
+    void handleClaimCertificate({ silent: true }).then((issued) => {
+      if (issued) {
+        triggerToast("Course complete — your Cloudvaathi certificate was issued and emailed.", "success");
+      }
+    });
+  }, [data?.certificate?.eligible, data?.certificate?.claimed, claiming, handleClaimCertificate]);
 
   const typeCards = useMemo(() => {
     if (!data) return [];
@@ -353,11 +376,13 @@ export default function CourseProgressDashboard() {
             <div className="flex items-center gap-3">
               <Award className="text-[#005EB8]" />
               <div>
-                <p className="font-extrabold text-slate-800">{certificate.claimed ? "Certificate ready" : "You finished this course"}</p>
+                <p className="font-extrabold text-slate-800">
+                  {certificate.claimed ? "Cloudvaathi certificate ready" : claiming ? "Issuing certificate..." : "You finished this course"}
+                </p>
                 <p className="text-sm text-slate-500">
                   {certificate.claimed
-                    ? (certificate.credential_id ? `Certificate No: ${certificate.credential_id}` : "Download your certificate of completion.")
-                    : "Your certificate of completion is being prepared."}
+                    ? (certificate.credential_id ? `Certificate No: ${certificate.credential_id}` : "Download your Cloudvaathi certificate.")
+                    : "Your certificate will be issued automatically when all requirements are complete."}
                 </p>
               </div>
             </div>
@@ -372,8 +397,8 @@ export default function CourseProgressDashboard() {
                   <Download size={16} /> Download
                 </button>
               ) : (
-                <button onClick={handleClaimCertificate} disabled={claiming} className="px-4 py-2 rounded-xl bg-[#005EB8] text-white font-bold text-sm">
-                  {claiming ? "Issuing..." : "Get certificate"}
+                <button onClick={() => void handleClaimCertificate()} disabled={claiming} className="px-4 py-2 rounded-xl bg-[#005EB8] text-white font-bold text-sm">
+                  {claiming ? "Issuing..." : "Issue certificate"}
                 </button>
               )}
             </div>

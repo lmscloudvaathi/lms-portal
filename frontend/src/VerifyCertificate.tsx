@@ -63,7 +63,7 @@ export default function VerifyCertificate() {
           <div className="flex items-center gap-3 mb-6">
             <BrandLogo size="md" imageOnly />
             <div>
-              <p className="text-[10px] uppercase tracking-[0.2em] font-bold text-slate-400">Cloud Vaathi</p>
+              <p className="text-[10px] uppercase tracking-[0.2em] font-bold text-slate-400">Cloudvaathi</p>
               <h1 className="text-xl font-extrabold">Certificate verification</h1>
             </div>
           </div>
@@ -82,7 +82,7 @@ export default function VerifyCertificate() {
             <div>
               <div className="flex items-center gap-2 text-green-700 bg-green-50 border border-green-100 rounded-xl px-3 py-2 mb-6">
                 <CheckCircle2 size={18} />
-                <span className="text-sm font-bold">Valid Cloud Vaathi certificate</span>
+                <span className="text-sm font-bold">Valid Cloudvaathi certificate</span>
               </div>
               <div className="space-y-4">
                 <div>

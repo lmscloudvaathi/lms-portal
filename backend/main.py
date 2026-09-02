@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse, FileResponse
 import requests
 import io
 import json
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -67,6 +68,8 @@ from pdf_certificate import close_shared_browser
 # Load .env from this file's directory so GOOGLE_CLIENT_ID, DATABASE_URL, etc. work
 # even when uvicorn's cwd is not `backend/`.
 load_dotenv(Path(__file__).resolve().parent / ".env")
+
+logger = logging.getLogger(__name__)
 
 # 1. Initialize Database Tables (Async approach is slightly different, but for now we keep sync creation for simplicity or use Alembic in prod)
 # For this setup, we will rely on the sync engine for table creation if needed, or assume tables exist.
@@ -2111,7 +2114,7 @@ async def generate_pdf_endpoint(course_id: int, db: AsyncSession = Depends(get_d
     try:
         pdf_path = await certificate_service.ensure_certificate_pdf(db, certificate, current_user, course)
     except Exception as exc:
-        print(f"Certificate PDF error: {exc}")
+        logger.exception("Certificate PDF error: %s", exc)
         raise HTTPException(status_code=500, detail="Could not generate the certificate PDF. Please try again.")
 
     filename = f"{(course.title or 'certificate').replace(' ', '_')}_{certificate.certificate_id}.pdf"
@@ -2377,7 +2380,17 @@ async def submit_assignment(file: UploadFile = File(...), lesson_title: str = Fo
         
         await db.commit()
 
-    return {"message": "Submitted", "drive_status": drive_status}
+        cert = await certificate_service.issue_after_content_complete(
+            db, current_user, assignment_data.id
+        )
+        payload = {
+            "message": "Submitted",
+            "drive_status": drive_status,
+            **certificate_service.certificate_response_payload(cert),
+        }
+        return payload
+
+    return {"message": "Submitted", "drive_status": drive_status, "certificate_issued": False}
 
 @app.post("/api/v1/confirm-submission")
 async def confirm_submission(req: ConfirmationRequest, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -2395,9 +2408,14 @@ async def confirm_submission(req: ConfirmationRequest, db: AsyncSession = Depend
         db.add(models.LessonProgress(user_id=current_user.id, content_item_id=assignment.id, is_completed=True))
     
     await db.commit()
-    
-    # ✅ Removed certificate logic. Certificate is now only claimed via the "Claim Certificate" button.
-    return {"message": "Submitted"}
+
+    cert = await certificate_service.issue_after_content_complete(
+        db, current_user, assignment.id
+    )
+    return {
+        "message": "Submitted",
+        **certificate_service.certificate_response_payload(cert),
+    }
 # In main.py
 
 @app.get("/api/v1/instructor/dashboard-stats")
@@ -2756,11 +2774,19 @@ async def claim_course_certificate(course_id: int, db: AsyncSession = Depends(ge
         )
         if not cert:
             return {"status": "error", "message": "Could not issue certificate."}
+        cert_payload = certificate_service.serialize_certificate(cert, course.title)
+        message = "Certificate Generated!"
+        if cert_payload.get("status") == "FAILED":
+            message = "Certificate was recorded but PDF generation failed. Try downloading again shortly."
+        elif cert_payload.get("email_status") == "FAILED":
+            message = "Certificate issued. Email delivery failed — you can still download it here."
+        elif cert_payload.get("email_status") == "SENT":
+            message = "Your Cloudvaathi certificate was issued and emailed."
         return {
             "status": "success",
-            "message": "Certificate Generated!",
-            "certificate_ready": True,
-            "certificate": certificate_service.serialize_certificate(cert, course.title),
+            "message": message,
+            "certificate_ready": cert_payload.get("status") != "FAILED",
+            "certificate": cert_payload,
         }
     
     return {"status": "error", "message": "Requirements not met."}

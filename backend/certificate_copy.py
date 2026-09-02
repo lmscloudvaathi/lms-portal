@@ -79,7 +79,7 @@ def build_course_body(
             topics = (
                 f"{label} concepts and the practical skills taught in this programme"
                 if label
-                else "the skills and outcomes taught in this Cloud Vaathi programme"
+                else "the skills and outcomes taught in this Cloudvaathi programme"
             )
     return (
         f"has successfully completed {_duration_phrase(duration_minutes)}{_quoted_course_name(course_name)} "

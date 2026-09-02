@@ -240,7 +240,7 @@ const CodeCompiler = ({ lesson, contentItemId, onLessonComplete }: { lesson: any
             const token = localStorage.getItem("token");
             const completeRes = await axios.post(`${API_BASE_URL}/content/${contentItemId}/complete`, {}, { headers: { Authorization: `Bearer ${token}` } });
             if (completeRes.data?.certificate_issued) {
-                triggerToast("Course complete — certificate issued!", "success");
+                triggerToast("Course complete — your Cloudvaathi certificate was issued!", "success");
             } else {
                 triggerToast("Lesson finished and marked complete!", "success");
             }
@@ -572,7 +572,7 @@ const CodingPlayer = ({ course, token }: { course: any, token: string }) => {
                 setChallenges(updated);
                 if (solveRes.data?.certificate_issued) {
                     setCertificateReady(true);
-                    triggerToast("Course complete — certificate issued!", "success");
+                    triggerToast("Course complete — your Cloudvaathi certificate was issued!", "success");
                 }
             } else {
                 const fail = report.results?.find((r: any) => r.status !== "Passed");
@@ -1397,11 +1397,15 @@ const CoursePlayer = () => {
             formData.append("file", assignmentFile);
             formData.append("lesson_title", activeLesson.title);
             formData.append("lesson_id", activeLesson.id);
-            await axios.post(`${API_BASE_URL}/submit-assignment`, formData, {
+            const uploadRes = await axios.post(`${API_BASE_URL}/submit-assignment`, formData, {
                 headers: { "Authorization": `Bearer ${token}` },
                 onUploadProgress: (progressEvent) => { if (progressEvent.total) { const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total); console.log(`Uploading: ${percent}%`); } }
             });
-            triggerToast(`✅ Assignment "${assignmentFile.name}" Submitted Successfully!`, "success");
+            if (uploadRes.data?.certificate_issued) {
+                triggerToast("Assignment submitted — your Cloudvaathi certificate was issued!", "success");
+            } else {
+                triggerToast(`✅ Assignment "${assignmentFile.name}" Submitted Successfully!`, "success");
+            }
             setAssignmentFile(null);
             setRefreshTrigger(prev => prev + 1);
         } catch (err) { console.error("Upload Error:", err); triggerToast("❌ Upload Failed. Please try again.", "error"); } finally { setUploading(false); }
@@ -1412,7 +1416,7 @@ const CoursePlayer = () => {
             const token = localStorage.getItem("token");
             const res = await axios.post(`${API_BASE_URL}/content/${lesson.id}/complete`, {}, { headers: { Authorization: `Bearer ${token}` } });
             if (res.data?.certificate_issued) {
-                triggerToast("Course complete — certificate issued!", "success");
+                triggerToast("Course complete — your Cloudvaathi certificate was issued!", "success");
             } else {
                 triggerToast(lesson.is_completed ? "Marked as Incomplete" : "Marked as Complete!", "success");
             }

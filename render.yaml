@@ -47,5 +47,11 @@ services:
         sync: false
       - key: BREVO_API_KEY
         sync: false
+      - key: PUBLIC_SITE_URL
+        sync: false
+      - key: CERTIFICATE_ID_PREFIX
+        sync: false
+      - key: CERTIFICATE_ID_BASE
+        sync: false
       - key: JUDGE0_API_URL
         sync: false
