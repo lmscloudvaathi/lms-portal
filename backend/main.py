@@ -12,7 +12,7 @@ import models
 from database import engine, get_db, AsyncSessionLocal, IS_SQLITE
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 import requests
 import io
 import json
@@ -2263,59 +2263,102 @@ async def update_content(content_id: int, update: ContentUpdate, db: AsyncSessio
         return {"message": "Updated"}
     raise HTTPException(status_code=404)
 
+def _cors_json(status_code: int, content: dict, request: Optional[Request] = None) -> JSONResponse:
+    """Always attach CORS for LMS origins. Cloudflare strips headers on origin 502/504 pages."""
+    origin = ""
+    if request is not None:
+        origin = (request.headers.get("origin") or "").strip()
+    allowed = origin if (
+        origin in _cors_allow
+        or (origin.startswith("https://") and origin.endswith("cloudvaathi.in"))
+        or origin.startswith("http://localhost:")
+        or origin.startswith("http://127.0.0.1:")
+    ) else "https://lms.cloudvaathi.in"
+    return JSONResponse(
+        status_code=status_code,
+        content=content,
+        headers={
+            "Access-Control-Allow-Origin": allowed,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+            "Vary": "Origin",
+        },
+    )
+
+
+@app.get("/api/v1/payment/health")
+async def payment_health():
+    """Deploy/check marker — does not create a charge."""
+    return {
+        "payment_api": "v2-no-502",
+        "razorpay_configured": _razorpay_configured(),
+        "key_prefix": (RAZORPAY_KEY_ID[:12] + "…") if RAZORPAY_KEY_ID else None,
+    }
+
+
 @app.post("/api/v1/create-order")
 async def create_payment_order(
     data: CreateOrderRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_user),
 ):
-    # Use 4xx/503 (not 502) so CDNs/proxies do not strip CORS and hide the real error.
-    rzp = get_razorpay_client()
-
-    res = await db.execute(select(models.Course).where(models.Course.id == data.course_id))
-    course = res.scalars().first()
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-
+    # Never return 502/504 — Cloudflare replaces those with a plain page (no CORS),
+    # which browsers mis-report as a CORS failure on https://lms.cloudvaathi.in.
     try:
-        amount_value = int(course.price or 0)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Course price is invalid")
-    if amount_value <= 0:
-        raise HTTPException(status_code=400, detail="Course amount must be greater than zero")
+        if not _razorpay_configured():
+            return _cors_json(400, {
+                "detail": "Razorpay is not configured on the server (RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET).",
+            }, request)
 
-    order_data = {
-        "amount": amount_value * 100,
-        "currency": "INR",
-        "payment_capture": 1,
-        "notes": {
-            "course_id": str(data.course_id),
-            "user_id": str(current_user.id),
-        },
-    }
-    try:
-        order = await asyncio.wait_for(
-            asyncio.to_thread(rzp.order.create, data=order_data),
-            timeout=25,
-        )
-        # Return the exact publishable key used by this backend account.
-        # This prevents frontend/backend key-account mismatch in Checkout.
-        order_payload = dict(order) if not isinstance(order, dict) else order
-        order_payload = dict(order_payload)
+        rzp = get_razorpay_client()
+
+        res = await db.execute(select(models.Course).where(models.Course.id == data.course_id))
+        course = res.scalars().first()
+        if not course:
+            return _cors_json(404, {"detail": "Course not found"}, request)
+
+        try:
+            amount_value = int(course.price or 0)
+        except (TypeError, ValueError):
+            return _cors_json(400, {"detail": "Course price is invalid"}, request)
+        if amount_value <= 0:
+            return _cors_json(400, {"detail": "Course amount must be greater than zero"}, request)
+
+        order_data = {
+            "amount": amount_value * 100,
+            "currency": "INR",
+            "payment_capture": 1,
+            "notes": {
+                "course_id": str(data.course_id),
+                "user_id": str(current_user.id),
+            },
+        }
+        try:
+            order = await asyncio.wait_for(
+                asyncio.to_thread(rzp.order.create, data=order_data),
+                timeout=15,
+            )
+        except asyncio.TimeoutError:
+            logger.exception("Razorpay order creation timed out for course %s", data.course_id)
+            return _cors_json(400, {"detail": "Payment gateway timed out. Please try again."}, request)
+        except Exception as e:
+            logger.exception("Razorpay order creation failed for course %s: %s", data.course_id, e)
+            return _cors_json(400, {
+                "detail": f"Could not start payment with Razorpay: {e}",
+            }, request)
+
+        order_payload = dict(order) if not isinstance(order, dict) else dict(order)
         order_payload["key_id"] = RAZORPAY_KEY_ID
-        return order_payload
-    except asyncio.TimeoutError:
-        logger.exception("Razorpay order creation timed out for course %s", data.course_id)
-        raise HTTPException(status_code=504, detail="Payment gateway timed out. Please try again.")
-    except HTTPException:
-        raise
+        return _cors_json(200, order_payload, request)
+    except HTTPException as he:
+        code = he.status_code if 400 <= int(he.status_code) < 500 else 400
+        detail = he.detail if isinstance(he.detail, str) else "Payment could not be started."
+        return _cors_json(code, {"detail": detail}, request)
     except Exception as e:
-        logger.exception("Razorpay order creation failed for course %s: %s", data.course_id, e)
-        # Do not use 502 — browsers report it as a CORS failure when the proxy rewrites the response.
-        raise HTTPException(
-            status_code=400,
-            detail=f"Could not start payment. Check Razorpay keys on the server. ({e})",
-        )
+        logger.exception("create-order crashed: %s", e)
+        return _cors_json(400, {"detail": f"Payment could not be started: {e}"}, request)
 
 @app.post("/api/v1/payment/verify")
 async def verify_payment_and_unlock_course(
@@ -2345,10 +2388,10 @@ async def verify_payment_and_unlock_course(
     try:
         payment = await asyncio.wait_for(
             asyncio.to_thread(rzp.payment.fetch, payload.razorpay_payment_id),
-            timeout=25,
+            timeout=15,
         )
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Could not verify payment (gateway timeout). Contact support with your payment ID.")
+        raise HTTPException(status_code=400, detail="Could not verify payment (gateway timeout). Contact support with your payment ID.")
     except Exception as e:
         logger.exception("Razorpay payment fetch failed: %s", e)
         raise HTTPException(status_code=400, detail=f"Unable to fetch payment details: {str(e)}")
