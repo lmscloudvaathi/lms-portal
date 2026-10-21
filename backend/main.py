@@ -228,9 +228,36 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60))
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/login") 
 
 # --- 💳 RAZORPAY ---
-RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
-RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
-client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+RAZORPAY_KEY_ID = (os.getenv("RAZORPAY_KEY_ID") or "").strip()
+RAZORPAY_KEY_SECRET = (os.getenv("RAZORPAY_KEY_SECRET") or "").strip()
+_razorpay_client = None
+
+
+def _razorpay_configured() -> bool:
+    return bool(
+        RAZORPAY_KEY_ID
+        and RAZORPAY_KEY_SECRET
+        and "replace_me" not in RAZORPAY_KEY_ID
+        and "replace_me" not in RAZORPAY_KEY_SECRET
+        and "your_razorpay" not in RAZORPAY_KEY_ID
+    )
+
+
+def get_razorpay_client():
+    """Lazy Razorpay client so missing/invalid env does not crash app startup."""
+    global _razorpay_client
+    if not _razorpay_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Razorpay is not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET on the server.",
+        )
+    if _razorpay_client is None:
+        _razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+    return _razorpay_client
+
+
+# Backwards-compatible alias used by older call sites / scripts.
+client = None
 
 # --- ✨ GEMINI AI ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -2242,16 +2269,18 @@ async def create_payment_order(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    # Razorpay client is sync, use thread
-    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET or "replace_me" in str(RAZORPAY_KEY_ID) or "replace_me" in str(RAZORPAY_KEY_SECRET):
-        raise HTTPException(status_code=500, detail="Razorpay is not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in backend/.env")
+    # Use 4xx/503 (not 502) so CDNs/proxies do not strip CORS and hide the real error.
+    rzp = get_razorpay_client()
 
     res = await db.execute(select(models.Course).where(models.Course.id == data.course_id))
     course = res.scalars().first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
 
-    amount_value = int(course.price or 0)
+    try:
+        amount_value = int(course.price or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Course price is invalid")
     if amount_value <= 0:
         raise HTTPException(status_code=400, detail="Course amount must be greater than zero")
 
@@ -2261,18 +2290,32 @@ async def create_payment_order(
         "payment_capture": 1,
         "notes": {
             "course_id": str(data.course_id),
-            "user_id": str(current_user.id)
-        }
+            "user_id": str(current_user.id),
+        },
     }
     try:
-        order = await asyncio.to_thread(client.order.create, data=order_data)
+        order = await asyncio.wait_for(
+            asyncio.to_thread(rzp.order.create, data=order_data),
+            timeout=25,
+        )
         # Return the exact publishable key used by this backend account.
         # This prevents frontend/backend key-account mismatch in Checkout.
-        order_payload = dict(order)
+        order_payload = dict(order) if not isinstance(order, dict) else order
+        order_payload = dict(order_payload)
         order_payload["key_id"] = RAZORPAY_KEY_ID
         return order_payload
+    except asyncio.TimeoutError:
+        logger.exception("Razorpay order creation timed out for course %s", data.course_id)
+        raise HTTPException(status_code=504, detail="Payment gateway timed out. Please try again.")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Razorpay order creation failed: {str(e)}")
+        logger.exception("Razorpay order creation failed for course %s: %s", data.course_id, e)
+        # Do not use 502 — browsers report it as a CORS failure when the proxy rewrites the response.
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not start payment. Check Razorpay keys on the server. ({e})",
+        )
 
 @app.post("/api/v1/payment/verify")
 async def verify_payment_and_unlock_course(
@@ -2280,8 +2323,7 @@ async def verify_payment_and_unlock_course(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET or "replace_me" in str(RAZORPAY_KEY_ID) or "replace_me" in str(RAZORPAY_KEY_SECRET):
-        raise HTTPException(status_code=500, detail="Razorpay is not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in backend/.env")
+    rzp = get_razorpay_client()
 
     res = await db.execute(select(models.Course).where(models.Course.id == payload.course_id))
     course = res.scalars().first()
@@ -2290,7 +2332,7 @@ async def verify_payment_and_unlock_course(
 
     try:
         await asyncio.to_thread(
-            client.utility.verify_payment_signature,
+            rzp.utility.verify_payment_signature,
             {
                 "razorpay_order_id": payload.razorpay_order_id,
                 "razorpay_payment_id": payload.razorpay_payment_id,
@@ -2301,9 +2343,15 @@ async def verify_payment_and_unlock_course(
         raise HTTPException(status_code=400, detail="Payment signature verification failed")
 
     try:
-        payment = await asyncio.to_thread(client.payment.fetch, payload.razorpay_payment_id)
+        payment = await asyncio.wait_for(
+            asyncio.to_thread(rzp.payment.fetch, payload.razorpay_payment_id),
+            timeout=25,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Could not verify payment (gateway timeout). Contact support with your payment ID.")
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Unable to fetch payment details: {str(e)}")
+        logger.exception("Razorpay payment fetch failed: %s", e)
+        raise HTTPException(status_code=400, detail=f"Unable to fetch payment details: {str(e)}")
 
     expected_amount = int(course.price or 0) * 100
     paid_amount = int(payment.get("amount") or 0)
