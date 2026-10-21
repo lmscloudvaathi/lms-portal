@@ -9,6 +9,12 @@ import { runTestCasesLocally } from './utils/pyodideEnv';
 import { CODE_TEMPLATES } from './utils/codeTemplates';
 import { downloadCertificatePdf } from './utils/certificates';
 import { loadRazorpayScript } from './utils/loadRazorpay';
+import {
+  getRazorpayKeyId,
+  getRazorpayPayLinkUrl,
+  isRazorpayKeyConfigured,
+  openRazorpayPayLink,
+} from './utils/razorpayConfig';
 import { loadJetBrainsMonoFont } from './utils/loadFonts';
 import ThumbnailPicker from "./components/ThumbnailPicker";
 import {
@@ -1221,7 +1227,7 @@ const CoursePlayer = () => {
         err?.response?.data?.detail || err?.response?.data?.message || err?.message || fallback;
 
     const brand = { blue: "var(--neon-cyan)", green: "var(--neon-cyan)", textMain: "var(--foreground)", textLight: "var(--muted-foreground)" };
-    const RAZORPAY_PAYLINK_URL = import.meta.env.VITE_RAZORPAY_PAYLINK_URL;
+    const RAZORPAY_PAYLINK_URL = getRazorpayPayLinkUrl();
 
     const handlePayment = async () => {
         try {
@@ -1234,13 +1240,14 @@ const CoursePlayer = () => {
                 return;
             }
 
-            const orderUrl = `${API_BASE_URL}/create-order`;
-            const token = localStorage.getItem("token");
-            const razorpayKey = import.meta.env.VITE_RAZORPAY_KEY_ID;
-            if (!razorpayKey || String(razorpayKey).includes("replace_me")) {
-                triggerToast("Set a valid VITE_RAZORPAY_KEY_ID in frontend/.env", "error");
+            if (!isRazorpayKeyConfigured()) {
+                triggerToast("Razorpay is not configured. Please contact support.", "error");
                 return;
             }
+
+            const orderUrl = `${API_BASE_URL}/create-order`;
+            const token = localStorage.getItem("token");
+            const razorpayKey = getRazorpayKeyId();
 
             const isLoaded = await loadRazorpayScript();
             if (!isLoaded) {
@@ -1258,7 +1265,7 @@ const CoursePlayer = () => {
             const options = {
                 key: data.key_id || razorpayKey,
                 amount: data.amount,
-                currency: "INR",
+                currency: data.currency || "INR",
                 name: "Cloud Vaathi Pro",
                 description: "Lifetime Course Access",
                 order_id: data.id,
@@ -1283,10 +1290,20 @@ const CoursePlayer = () => {
                 theme: { color: "#87C232" }
             };
             const rzp1 = new (window as any).Razorpay(options);
+            rzp1.on("payment.failed", (response: any) => {
+                const reason = response?.error?.description || response?.error?.reason || "Payment failed.";
+                triggerToast(reason, "error");
+            });
             rzp1.open();
         } catch (error: any) {
             console.error(error);
             triggerToast(getErrorMessage(error, "Payment init failed"), "error");
+        }
+    };
+
+    const handleRazorpayPayLink = () => {
+        if (!openRazorpayPayLink()) {
+            triggerToast("Razorpay payment link is not configured.", "error");
         }
     };
 
@@ -1607,7 +1624,8 @@ const CoursePlayer = () => {
                     </button>
                     {RAZORPAY_PAYLINK_URL && (
                         <button
-                            onClick={handlePayment}
+                            type="button"
+                            onClick={handleRazorpayPayLink}
                             className="w-full mt-3 py-3 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl font-bold text-sm transition-all"
                         >
                             Pay via Razorpay Link

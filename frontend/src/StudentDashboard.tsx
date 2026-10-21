@@ -27,6 +27,12 @@ import { clearSession, getValidSession, isStudentSession } from "./utils/session
 import { categoryLabel, groupCoursesByCategory, resolveCourseCategory, type CourseCategoryId } from "./utils/courseCategories";
 import { certificateVerifyPath, downloadCertificatePdf } from "./utils/certificates";
 import { loadRazorpayScript } from "./utils/loadRazorpay";
+import {
+  getRazorpayKeyId,
+  getRazorpayPayLinkUrl,
+  isRazorpayKeyConfigured,
+  openRazorpayPayLink,
+} from "./utils/razorpayConfig";
 import { loadJetBrainsMonoFont } from "./utils/loadFonts";
 
 // --- TYPES ---
@@ -293,7 +299,7 @@ const CourseCard = ({ course, type, navigate, handleFreeEnroll, openEnrollModal,
 
 const StudentDashboard = () => {
     const navigate = useNavigate();
-    const RAZORPAY_PAYLINK_URL = import.meta.env.VITE_RAZORPAY_PAYLINK_URL;
+    const RAZORPAY_PAYLINK_URL = getRazorpayPayLinkUrl();
     const [activeTab, setActiveTab] = useState("home");
 
     const switchTab = (tab: string) => {
@@ -1061,15 +1067,16 @@ const StudentDashboard = () => {
                 triggerToast(`🎉 Free Trial Started for ${selectedCourse.title}!`, "success");
                 fetchData(); setShowModal(false); setActiveTab("learning");
             } else {
-                const isLoaded = await loadRazorpayScript();
-                if (!isLoaded) { triggerToast("SDK Failed to load", "error"); return; }
-                const razorpayKey = import.meta.env.VITE_RAZORPAY_KEY_ID;
-                if (!razorpayKey || String(razorpayKey).includes("replace_me")) {
-                    triggerToast("Set a valid VITE_RAZORPAY_KEY_ID in frontend/.env", "error");
+                if (!isRazorpayKeyConfigured()) {
+                    triggerToast("Razorpay is not configured. Please contact support.", "error");
                     return;
                 }
+                const isLoaded = await loadRazorpayScript();
+                if (!isLoaded) { triggerToast("Payment gateway failed to load. Check your connection.", "error"); return; }
+                const razorpayKey = getRazorpayKeyId();
 
                 const token = localStorage.getItem("token");
+                const session = getValidSession();
                 const orderRes = await axios.post(`${API_BASE_URL}/create-order`,
                     { course_id: selectedCourse.id },
                     { headers: { Authorization: `Bearer ${token}` } }
@@ -1078,29 +1085,40 @@ const StudentDashboard = () => {
                 const options = {
                     key: orderRes.data.key_id || razorpayKey,
                     amount: orderRes.data.amount,
-                    currency: orderRes.data.currency,
+                    currency: orderRes.data.currency || "INR",
                     name: "Cloud Vaathi Pro",
                     description: `Unlock ${selectedCourse.title}`,
                     order_id: orderRes.data.id,
                     handler: async function (response: any) {
-                        await axios.post(
-                            `${API_BASE_URL}/payment/verify`,
-                            {
-                                course_id: selectedCourse.id,
-                                razorpay_payment_id: response.razorpay_payment_id,
-                                razorpay_order_id: response.razorpay_order_id,
-                                razorpay_signature: response.razorpay_signature
-                            },
-                            { headers: { Authorization: `Bearer ${token}` } }
-                        );
-                        triggerToast("🎉 Payment Successful! Course Unlocked.", "success");
-                        fetchData(); setShowModal(false); setActiveTab("learning");
+                        try {
+                            await axios.post(
+                                `${API_BASE_URL}/payment/verify`,
+                                {
+                                    course_id: selectedCourse.id,
+                                    razorpay_payment_id: response.razorpay_payment_id,
+                                    razorpay_order_id: response.razorpay_order_id,
+                                    razorpay_signature: response.razorpay_signature
+                                },
+                                { headers: { Authorization: `Bearer ${token}` } }
+                            );
+                            triggerToast("🎉 Payment Successful! Course Unlocked.", "success");
+                            fetchData(); setShowModal(false); setActiveTab("learning");
+                        } catch (verifyErr: any) {
+                            triggerToast(getErrorMessage(verifyErr, "Payment succeeded, but unlock failed. Contact support."), "error");
+                        }
                     },
-                    prefill: { name: "Student", email: "lmscloudvaathi@gmail.com" },
+                    prefill: {
+                        name: studentProfile?.name || "Student",
+                        email: session?.email || studentProfile?.email || "",
+                    },
                     theme: { color: "#005EB8" },
                 };
 
                 const rzp = new (window as any).Razorpay(options);
+                rzp.on("payment.failed", (response: any) => {
+                    const reason = response?.error?.description || response?.error?.reason || "Payment failed.";
+                    triggerToast(reason, "error");
+                });
                 rzp.open();
             }
         } catch (err: any) {
@@ -1669,7 +1687,12 @@ const StudentDashboard = () => {
                                 </button>
                                 {RAZORPAY_PAYLINK_URL && (
                                     <button
-                                        onClick={() => handleEnrollStrategy("paid")}
+                                        type="button"
+                                        onClick={() => {
+                                            if (!openRazorpayPayLink()) {
+                                                triggerToast("Razorpay payment link is not configured.", "error");
+                                            }
+                                        }}
                                         className="w-full py-3 rounded-lg bg-white border border-slate-300 text-slate-600 font-bold hover:bg-slate-50 transition-all text-sm"
                                     >
                                         Pay via Razorpay Link
