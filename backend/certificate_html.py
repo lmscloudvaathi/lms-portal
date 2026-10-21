@@ -50,16 +50,34 @@ function fitCertificateText() {
     var min = parseFloat(el.getAttribute('data-min-size') || '11');
     var max = parseFloat(el.getAttribute('data-max-size') || '14');
     var kind = el.getAttribute('data-fit');
-    var size = max;
-    el.style.fontSize = size + 'px';
     if (kind === 'name') {
+      // Left-align with intro ("Cloudvaathi certifies that"); shrink to fit one line.
       el.style.whiteSpace = 'nowrap';
-      while (el.scrollWidth > el.clientWidth && size > min) {
-        size -= 0.5;
-        el.style.fontSize = size + 'px';
+      el.style.textAlign = 'left';
+      el.style.justifyContent = 'flex-start';
+      el.style.overflow = 'hidden';
+      var lo = min;
+      var hi = max;
+      var best = min;
+      while (hi - lo > 0.25) {
+        var mid = (lo + hi) / 2;
+        el.style.fontSize = mid + 'px';
+        if (el.scrollWidth <= el.clientWidth) {
+          best = mid;
+          lo = mid;
+        } else {
+          hi = mid;
+        }
+      }
+      el.style.fontSize = best + 'px';
+      while (el.scrollWidth > el.clientWidth && best > min) {
+        best -= 0.25;
+        el.style.fontSize = best + 'px';
       }
       return;
     }
+    var size = max;
+    el.style.fontSize = size + 'px';
     var copy = el.querySelector('.body-copy') || el;
     while (copy.scrollHeight > el.clientHeight && size > min) {
       size -= 0.5;

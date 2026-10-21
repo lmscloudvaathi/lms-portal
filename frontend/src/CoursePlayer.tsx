@@ -442,7 +442,12 @@ const CodingPlayer = ({ course, token }: { course: any, token: string }) => {
             const res = await axios.post(`${API_BASE_URL}/courses/${courseId}/claim-certificate`, {}, { headers: { Authorization: `Bearer ${token}` } });
             if (res.data.status === "success") {
                 setCertificateReady(true);
-                triggerToast("Certificate issued!", "success");
+                try {
+                    await downloadCertificatePdf(Number(courseId), course?.title || "certificate");
+                    triggerToast(res.data.message || "Certificate issued and downloaded!", "success");
+                } catch {
+                    triggerToast(res.data.message || "Certificate issued! Click again to download.", "success");
+                }
             } else {
                 triggerToast(res.data.message, "error");
             }
@@ -1463,8 +1468,13 @@ const CoursePlayer = () => {
             }
             const res = await axios.post(`${API_BASE_URL}/courses/${courseId}/claim-certificate`, {}, { headers: { Authorization: `Bearer ${token}` } });
             if (res.data.status === "success") {
-                triggerToast("Certificate issued!", "success");
                 setRefreshTrigger(prev => prev + 1);
+                try {
+                    await downloadCertificatePdf(Number(courseId), course?.title || "certificate");
+                    triggerToast(res.data.message || "Certificate issued and downloaded!", "success");
+                } catch {
+                    triggerToast(res.data.message || "Certificate issued! Click again to download.", "success");
+                }
             } else { triggerToast(res.data.message || "Course not yet complete.", "error"); }
         } catch (err) { triggerToast("Failed to get certificate.", "error"); }
     };

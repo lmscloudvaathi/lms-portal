@@ -38,10 +38,11 @@ SEAL_HEIGHT = 32.0
 CONTENT_X = 28.5
 CONTENT_WIDTH = 58.0
 CONTENT_RIGHT = CONTENT_X + CONTENT_WIDTH  # ~86.5
-NAME_X = 22.0
-NAME_MAX_WIDTH = 62.0
-NAME_MAX_FONT = 42
-NAME_MIN_FONT = 26
+# Recipient name shares the intro column's left edge ("Cloudvaathi certifies that").
+NAME_X = CONTENT_X
+NAME_MAX_WIDTH = CONTENT_WIDTH
+NAME_MAX_FONT = 36  # slightly smaller so longer names fit one line
+NAME_MIN_FONT = 18  # floor for auto-fit on very long names
 DESCRIPTION_X = CONTENT_X
 DESCRIPTION_Y = 61.0
 DESCRIPTION_MAX_WIDTH = CONTENT_WIDTH
@@ -86,7 +87,7 @@ DEFAULT_LAYOUT: Dict[str, Any] = {
         "recipient": {
             "x": NAME_X, "y": 48.6, "width": NAME_MAX_WIDTH, "height": 9.2,
             "fontFamily": "Oswald", "fontSize": NAME_MAX_FONT, "fontWeight": "700",
-            "fontStyle": "normal", "textAlign": "center", "verticalAlign": "center",
+            "fontStyle": "normal", "textAlign": "left", "verticalAlign": "center",
             "color": "#924E15", "lineHeight": 1.05, "letterSpacing": "0.04em",
             "display": "flex", "whiteSpace": "nowrap",
             "minFontSize": NAME_MIN_FONT, "maxFontSize": NAME_MAX_FONT, "fit": "name",
