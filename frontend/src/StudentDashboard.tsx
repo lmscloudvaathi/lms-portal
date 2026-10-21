@@ -33,6 +33,7 @@ import {
   isRazorpayKeyConfigured,
   openRazorpayPayLink,
 } from "./utils/razorpayConfig";
+import CouponApply, { type AppliedCoupon } from "./components/CouponApply";
 import { loadJetBrainsMonoFont } from "./utils/loadFonts";
 
 // --- TYPES ---
@@ -326,6 +327,7 @@ const StudentDashboard = () => {
     // Modal & Settings
     const [showModal, setShowModal] = useState(false);
     const [selectedCourse, setSelectedCourse] = useState<Course | null>(null);
+    const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(null);
     const [processing, setProcessing] = useState(false);
     const [toast, setToast] = useState<{ show: boolean; message: string; type: "success" | "error" }>({
         show: false, message: "", type: "success"
@@ -1067,6 +1069,23 @@ const StudentDashboard = () => {
                 triggerToast(`🎉 Free Trial Started for ${selectedCourse.title}!`, "success");
                 fetchData(); setShowModal(false); setActiveTab("learning");
             } else {
+                const token = localStorage.getItem("token");
+                const session = getValidSession();
+                const orderRes = await axios.post(`${API_BASE_URL}/create-order`,
+                    {
+                        course_id: selectedCourse.id,
+                        coupon_code: appliedCoupon?.code || undefined,
+                    },
+                    { headers: { Authorization: `Bearer ${token}` } }
+                );
+
+                if (orderRes.data?.free) {
+                    triggerToast(orderRes.data.message || "Course unlocked with coupon!", "success");
+                    setAppliedCoupon(null);
+                    fetchData(); setShowModal(false); setActiveTab("learning");
+                    return;
+                }
+
                 if (!isRazorpayKeyConfigured()) {
                     triggerToast("Razorpay is not configured. Please contact support.", "error");
                     return;
@@ -1074,13 +1093,6 @@ const StudentDashboard = () => {
                 const isLoaded = await loadRazorpayScript();
                 if (!isLoaded) { triggerToast("Payment gateway failed to load. Check your connection.", "error"); return; }
                 const razorpayKey = getRazorpayKeyId();
-
-                const token = localStorage.getItem("token");
-                const session = getValidSession();
-                const orderRes = await axios.post(`${API_BASE_URL}/create-order`,
-                    { course_id: selectedCourse.id },
-                    { headers: { Authorization: `Bearer ${token}` } }
-                );
 
                 const options = {
                     key: orderRes.data.key_id || razorpayKey,
@@ -1097,11 +1109,13 @@ const StudentDashboard = () => {
                                     course_id: selectedCourse.id,
                                     razorpay_payment_id: response.razorpay_payment_id,
                                     razorpay_order_id: response.razorpay_order_id,
-                                    razorpay_signature: response.razorpay_signature
+                                    razorpay_signature: response.razorpay_signature,
+                                    coupon_code: appliedCoupon?.code || undefined,
                                 },
                                 { headers: { Authorization: `Bearer ${token}` } }
                             );
                             triggerToast("🎉 Payment Successful! Course Unlocked.", "success");
+                            setAppliedCoupon(null);
                             fetchData(); setShowModal(false); setActiveTab("learning");
                         } catch (verifyErr: any) {
                             triggerToast(getErrorMessage(verifyErr, "Payment succeeded, but unlock failed. Contact support."), "error");
@@ -1147,7 +1161,11 @@ const StudentDashboard = () => {
         window.open(url, '_blank');
     };
 
-    const openEnrollModal = (course: Course) => { setSelectedCourse(course); setShowModal(true); };
+    const openEnrollModal = (course: Course) => {
+        setSelectedCourse(course);
+        setAppliedCoupon(null);
+        setShowModal(true);
+    };
     const handleLogout = () => { clearSession(); navigate("/"); };
 
     // --- ⚔️ THE REAL CODE ARENA VIEW ---
@@ -1526,6 +1544,7 @@ const StudentDashboard = () => {
                                         onPayClick={(course: Course) => {
                                             // Reuse modal logic for payment
                                             setSelectedCourse(course);
+                                            setAppliedCoupon(null);
                                             setShowModal(true);
                                         }}
                                     />
@@ -1676,14 +1695,24 @@ const StudentDashboard = () => {
                         </div>
 
                         <div className="p-6">
-                            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-6 flex items-center justify-between">
+                            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4 flex items-center justify-between">
                                 <div><span className="block text-[10px] font-bold text-slate-400 uppercase">Price</span><span className="text-2xl font-extrabold text-[#005EB8]">{formatStudentCourseAmount(selectedCourse.price) ?? "—"}</span></div>
                                 <div className="text-right"><span className="block text-[10px] font-bold text-slate-400 uppercase">Access</span><span className="text-sm font-bold text-slate-700">Lifetime</span></div>
                             </div>
 
+                            {Number(selectedCourse.price) > 0 && (
+                              <CouponApply
+                                courseId={selectedCourse.id}
+                                coursePrice={Number(selectedCourse.price) || 0}
+                                applied={appliedCoupon}
+                                onApplied={setAppliedCoupon}
+                                disabled={processing}
+                              />
+                            )}
+
                             <div className="flex flex-col gap-3">
                                 <button onClick={() => handleEnrollStrategy("paid")} disabled={processing} className="w-full py-3 rounded-lg bg-[#005EB8] hover:bg-blue-700 text-white font-bold shadow-lg shadow-blue-500/30 transition-all flex items-center justify-center gap-2">
-                                    {processing ? "Processing..." : <><Lock size={16} /> Pay & Unlock Now</>}
+                                    {processing ? "Processing..." : <><Lock size={16} /> {appliedCoupon?.is_free ? "Unlock with Coupon" : "Pay & Unlock Now"}</>}
                                 </button>
                                 {RAZORPAY_PAYLINK_URL && (
                                     <button

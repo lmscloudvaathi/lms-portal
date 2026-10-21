@@ -17,6 +17,7 @@ import {
 } from './utils/razorpayConfig';
 import { loadJetBrainsMonoFont } from './utils/loadFonts';
 import ThumbnailPicker from "./components/ThumbnailPicker";
+import CouponApply, { type AppliedCoupon } from "./components/CouponApply";
 import {
     PlayCircle, FileText, ChevronLeft, Menu, Code, HelpCircle,
     UploadCloud, Play, Save, Monitor, Cpu, ChevronDown, ChevronRight, CreditCard,
@@ -1202,6 +1203,7 @@ const CoursePlayer = () => {
     // ✅ 1. NEW STATE FOR PAYWALL
     const [isTrialExpired, setIsTrialExpired] = useState(false);
     const [expiredCourseDetails, setExpiredCourseDetails] = useState<{ title: string, price: number } | null>(null);
+    const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(null);
     const handleEditClick = () => {
         if (!course) return;
         setEditForm({ title: course.title || "", description: course.description || "", price: course.price || 0, image_url: course.image_url || "", language: course.language || "" });
@@ -1240,27 +1242,36 @@ const CoursePlayer = () => {
                 return;
             }
 
+            const orderUrl = `${API_BASE_URL}/create-order`;
+            const token = localStorage.getItem("token");
+
+            // ✅ 2. Create order for this exact course (amount comes from backend)
+            const { data } = await axios.post(
+                orderUrl,
+                {
+                    course_id: Number(courseId),
+                    coupon_code: appliedCoupon?.code || undefined,
+                },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+
+            if (data?.free) {
+                triggerToast(data.message || "Course unlocked with coupon!", "success");
+                setTimeout(() => window.location.reload(), 1200);
+                return;
+            }
+
             if (!isRazorpayKeyConfigured()) {
                 triggerToast("Razorpay is not configured. Please contact support.", "error");
                 return;
             }
 
-            const orderUrl = `${API_BASE_URL}/create-order`;
-            const token = localStorage.getItem("token");
             const razorpayKey = getRazorpayKeyId();
-
             const isLoaded = await loadRazorpayScript();
             if (!isLoaded) {
                 triggerToast("Unable to load payment gateway. Please try again.", "error");
                 return;
             }
-
-            // ✅ 2. Create order for this exact course (amount comes from backend)
-            const { data } = await axios.post(
-                orderUrl,
-                { course_id: Number(courseId) },
-                { headers: { Authorization: `Bearer ${token}` } }
-            );
 
             const options = {
                 key: data.key_id || razorpayKey,
@@ -1277,7 +1288,8 @@ const CoursePlayer = () => {
                                 course_id: Number(courseId),
                                 razorpay_payment_id: response.razorpay_payment_id,
                                 razorpay_order_id: response.razorpay_order_id,
-                                razorpay_signature: response.razorpay_signature
+                                razorpay_signature: response.razorpay_signature,
+                                coupon_code: appliedCoupon?.code || undefined,
                             },
                             { headers: { Authorization: `Bearer ${token}` } }
                         );
@@ -1609,18 +1621,27 @@ const CoursePlayer = () => {
                         Unlock lifetime access to continue learning.
                     </p>
 
-                    <div className="bg-slate-50 rounded-xl p-4 mb-6 border border-slate-100">
+                    <div className="bg-slate-50 rounded-xl p-4 mb-4 border border-slate-100">
                         <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">Total Price</p>
                         <p className="text-3xl font-extrabold text-slate-900">
                             {displayPrice === null ? "Sign in as a student to view the fee" : displayPrice === 0 ? "Free" : `₹${displayPrice}`}
                         </p>
                     </div>
 
+                    {displayPrice !== null && displayPrice > 0 && courseId && (
+                        <CouponApply
+                            courseId={Number(courseId)}
+                            coursePrice={Number(displayPrice)}
+                            applied={appliedCoupon}
+                            onApplied={setAppliedCoupon}
+                        />
+                    )}
+
                     <button
                         onClick={handlePayment}
                         className="w-full py-3.5 bg-[#87C232] hover:bg-[#76a82b] text-white rounded-xl font-bold text-lg flex items-center justify-center gap-2 transition-all shadow-lg shadow-green-200 hover:scale-105 active:scale-95 cursor-pointer"
                     >
-                        <CreditCard size={20} /> Buy Lifetime Access
+                        <CreditCard size={20} /> {appliedCoupon?.is_free ? "Unlock with Coupon" : "Buy Lifetime Access"}
                     </button>
                     {RAZORPAY_PAYLINK_URL && (
                         <button

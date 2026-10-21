@@ -215,3 +215,37 @@ class Notification(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", backref="notifications")
+
+
+class Coupon(Base):
+    """Discount codes students can apply before course payment."""
+    __tablename__ = "coupons"
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(64), unique=True, index=True, nullable=False)
+    # percent | flat
+    discount_type = Column(String(16), default="percent", nullable=False)
+    discount_value = Column(Integer, nullable=False)  # percent 1-100, or INR flat amount
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=True)  # null = all courses
+    max_uses = Column(Integer, nullable=True)
+    used_count = Column(Integer, default=0)
+    min_amount = Column(Integer, nullable=True)  # minimum course price in INR
+    is_active = Column(Boolean, default=True)
+    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    course = relationship("Course")
+
+
+class CouponRedemption(Base):
+    __tablename__ = "coupon_redemptions"
+    id = Column(Integer, primary_key=True, index=True)
+    coupon_id = Column(Integer, ForeignKey("coupons.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
+    order_id = Column(String(128), nullable=True)
+    original_amount = Column(Integer, nullable=False)
+    discount_amount = Column(Integer, nullable=False)
+    final_amount = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("coupon_id", "user_id", "course_id", name="uq_coupon_user_course"),)

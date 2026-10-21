@@ -63,6 +63,7 @@ from sqlalchemy import text
 from token_manager import TokenManager
 import code_runner
 import certificate_service
+import coupon_service
 from pdf_certificate import close_shared_browser
 
 # Load .env from this file's directory so GOOGLE_CLIENT_ID, DATABASE_URL, etc. work
@@ -170,6 +171,11 @@ token_manager = TokenManager()
 async def on_startup():
     await init_models()
     await _promote_super_admins()
+    try:
+        async with AsyncSessionLocal() as seed_db:
+            await coupon_service.ensure_default_coupons(seed_db)
+    except Exception as e:
+        print(f"Coupon seed note: {e}")
     token_manager.start()
 
 @app.on_event("shutdown")
@@ -307,12 +313,37 @@ class EnrollmentRequest(BaseModel):
 
 class CreateOrderRequest(BaseModel):
     course_id: int
+    coupon_code: Optional[str] = None
 
 class PaymentVerifyRequest(BaseModel):
     course_id: int
     razorpay_payment_id: str
     razorpay_order_id: str
     razorpay_signature: str
+    coupon_code: Optional[str] = None
+
+class CouponValidateRequest(BaseModel):
+    course_id: int
+    coupon_code: str
+
+class CouponCreateRequest(BaseModel):
+    code: str
+    discount_type: str = "percent"  # percent | flat
+    discount_value: int
+    course_id: Optional[int] = None
+    max_uses: Optional[int] = None
+    min_amount: Optional[int] = None
+    is_active: bool = True
+    expires_at: Optional[datetime] = None
+
+class CouponUpdateRequest(BaseModel):
+    discount_type: Optional[str] = None
+    discount_value: Optional[int] = None
+    course_id: Optional[int] = None
+    max_uses: Optional[int] = None
+    min_amount: Optional[int] = None
+    is_active: Optional[bool] = None
+    expires_at: Optional[datetime] = None
 
 class PasswordChange(BaseModel):
     new_password: str
@@ -2297,6 +2328,131 @@ async def payment_health():
     }
 
 
+@app.post("/api/v1/coupons/validate")
+async def validate_coupon(
+    req: CouponValidateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    course_res = await db.execute(select(models.Course).where(models.Course.id == req.course_id))
+    course = course_res.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    try:
+        return await coupon_service.validate_coupon_for_course(
+            db, code=req.coupon_code, course=course, user_id=current_user.id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/v1/coupons")
+async def list_coupons(
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    result = await db.execute(select(models.Coupon).order_by(models.Coupon.created_at.desc()))
+    return [coupon_service.serialize_coupon(c) for c in result.scalars().all()]
+
+
+@app.post("/api/v1/coupons")
+async def create_coupon(
+    req: CouponCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    code = coupon_service.normalize_coupon_code(req.code)
+    if not code:
+        raise HTTPException(status_code=400, detail="Coupon code is required.")
+    dtype = (req.discount_type or "percent").lower().strip()
+    if dtype not in {"percent", "flat"}:
+        raise HTTPException(status_code=400, detail="discount_type must be percent or flat.")
+    if int(req.discount_value) <= 0:
+        raise HTTPException(status_code=400, detail="discount_value must be greater than zero.")
+    if dtype == "percent" and int(req.discount_value) > 100:
+        raise HTTPException(status_code=400, detail="Percent discount cannot exceed 100.")
+
+    existing = await coupon_service.get_coupon_by_code(db, code)
+    if existing:
+        raise HTTPException(status_code=400, detail="Coupon code already exists.")
+
+    coupon = models.Coupon(
+        code=code,
+        discount_type=dtype,
+        discount_value=int(req.discount_value),
+        course_id=req.course_id,
+        max_uses=req.max_uses,
+        min_amount=req.min_amount,
+        is_active=bool(req.is_active),
+        expires_at=req.expires_at,
+    )
+    db.add(coupon)
+    await db.commit()
+    await db.refresh(coupon)
+    return coupon_service.serialize_coupon(coupon)
+
+
+@app.patch("/api/v1/coupons/{coupon_id}")
+async def update_coupon(
+    coupon_id: int,
+    req: CouponUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    result = await db.execute(select(models.Coupon).where(models.Coupon.id == coupon_id))
+    coupon = result.scalars().first()
+    if not coupon:
+        raise HTTPException(status_code=404, detail="Coupon not found")
+
+    if req.discount_type is not None:
+        dtype = req.discount_type.lower().strip()
+        if dtype not in {"percent", "flat"}:
+            raise HTTPException(status_code=400, detail="discount_type must be percent or flat.")
+        coupon.discount_type = dtype
+    if req.discount_value is not None:
+        if int(req.discount_value) <= 0:
+            raise HTTPException(status_code=400, detail="discount_value must be greater than zero.")
+        coupon.discount_value = int(req.discount_value)
+    if req.course_id is not None:
+        coupon.course_id = req.course_id
+    if req.max_uses is not None:
+        coupon.max_uses = req.max_uses
+    if req.min_amount is not None:
+        coupon.min_amount = req.min_amount
+    if req.is_active is not None:
+        coupon.is_active = bool(req.is_active)
+    if req.expires_at is not None:
+        coupon.expires_at = req.expires_at
+
+    await db.commit()
+    await db.refresh(coupon)
+    return coupon_service.serialize_coupon(coupon)
+
+
+async def _unlock_paid_enrollment(db: AsyncSession, user_id: int, course_id: int) -> None:
+    enroll_res = await db.execute(
+        select(models.Enrollment).where(
+            models.Enrollment.user_id == user_id,
+            models.Enrollment.course_id == course_id,
+        )
+    )
+    existing = enroll_res.scalars().first()
+    if existing:
+        existing.enrollment_type = "paid"
+        existing.expiry_date = None
+        await db.commit()
+        return
+    db.add(
+        models.Enrollment(
+            user_id=user_id,
+            course_id=course_id,
+            enrollment_type="paid",
+            expiry_date=None,
+        )
+    )
+    await db.commit()
+
+
 @app.post("/api/v1/create-order")
 async def create_payment_order(
     data: CreateOrderRequest,
@@ -2307,25 +2463,57 @@ async def create_payment_order(
     # Never return 502/504 — Cloudflare replaces those with a plain page (no CORS),
     # which browsers mis-report as a CORS failure on https://lms.cloudvaathi.in.
     try:
-        if not _razorpay_configured():
-            return _cors_json(400, {
-                "detail": "Razorpay is not configured on the server (RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET).",
-            }, request)
-
-        rzp = get_razorpay_client()
-
         res = await db.execute(select(models.Course).where(models.Course.id == data.course_id))
         course = res.scalars().first()
         if not course:
             return _cors_json(404, {"detail": "Course not found"}, request)
 
         try:
-            amount_value = int(course.price or 0)
-        except (TypeError, ValueError):
-            return _cors_json(400, {"detail": "Course price is invalid"}, request)
-        if amount_value <= 0:
-            return _cors_json(400, {"detail": "Course amount must be greater than zero"}, request)
+            pricing = await coupon_service.resolve_payable_amount(
+                db,
+                course=course,
+                coupon_code=data.coupon_code,
+                user_id=current_user.id,
+            )
+        except ValueError as e:
+            return _cors_json(400, {"detail": str(e)}, request)
 
+        amount_value = int(pricing["final_amount"])
+        if amount_value < 0:
+            return _cors_json(400, {"detail": "Course price is invalid"}, request)
+
+        # 100% coupon / free after discount — unlock without Razorpay.
+        if amount_value <= 0:
+            await _unlock_paid_enrollment(db, current_user.id, course.id)
+            if pricing.get("coupon_code"):
+                await coupon_service.record_coupon_redemption(
+                    db,
+                    coupon_code=pricing["coupon_code"],
+                    user_id=current_user.id,
+                    course_id=course.id,
+                    original_amount=int(pricing["original_amount"]),
+                    discount_amount=int(pricing["discount_amount"]),
+                    final_amount=0,
+                    order_id=None,
+                )
+            return _cors_json(200, {
+                "free": True,
+                "amount": 0,
+                "currency": "INR",
+                "original_amount": pricing["original_amount"],
+                "discount_amount": pricing["discount_amount"],
+                "final_amount": 0,
+                "coupon_code": pricing.get("coupon_code"),
+                "message": "Coupon applied. Course unlocked for free.",
+                "key_id": RAZORPAY_KEY_ID,
+            }, request)
+
+        if not _razorpay_configured():
+            return _cors_json(400, {
+                "detail": "Razorpay is not configured on the server (RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET).",
+            }, request)
+
+        rzp = get_razorpay_client()
         order_data = {
             "amount": amount_value * 100,
             "currency": "INR",
@@ -2333,6 +2521,9 @@ async def create_payment_order(
             "notes": {
                 "course_id": str(data.course_id),
                 "user_id": str(current_user.id),
+                "coupon_code": str(pricing.get("coupon_code") or ""),
+                "original_amount": str(pricing["original_amount"]),
+                "discount_amount": str(pricing["discount_amount"]),
             },
         }
         try:
@@ -2351,6 +2542,11 @@ async def create_payment_order(
 
         order_payload = dict(order) if not isinstance(order, dict) else dict(order)
         order_payload["key_id"] = RAZORPAY_KEY_ID
+        order_payload["original_amount"] = pricing["original_amount"]
+        order_payload["discount_amount"] = pricing["discount_amount"]
+        order_payload["final_amount"] = amount_value
+        order_payload["coupon_code"] = pricing.get("coupon_code")
+        order_payload["free"] = False
         return _cors_json(200, order_payload, request)
     except HTTPException as he:
         code = he.status_code if 400 <= int(he.status_code) < 500 else 400
@@ -2372,6 +2568,17 @@ async def verify_payment_and_unlock_course(
     course = res.scalars().first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+
+    try:
+        pricing = await coupon_service.resolve_payable_amount(
+            db,
+            course=course,
+            coupon_code=payload.coupon_code,
+            user_id=current_user.id,
+            for_payment_verify=True,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     try:
         await asyncio.to_thread(
@@ -2396,7 +2603,7 @@ async def verify_payment_and_unlock_course(
         logger.exception("Razorpay payment fetch failed: %s", e)
         raise HTTPException(status_code=400, detail=f"Unable to fetch payment details: {str(e)}")
 
-    expected_amount = int(course.price or 0) * 100
+    expected_amount = int(pricing["final_amount"]) * 100
     paid_amount = int(payment.get("amount") or 0)
     payment_status = str(payment.get("status") or "").lower()
     if paid_amount != expected_amount:
@@ -2404,28 +2611,18 @@ async def verify_payment_and_unlock_course(
     if payment_status not in {"captured", "authorized"}:
         raise HTTPException(status_code=400, detail=f"Payment not successful (status: {payment_status or 'unknown'})")
 
-    enroll_res = await db.execute(
-        select(models.Enrollment).where(
-            models.Enrollment.user_id == current_user.id,
-            models.Enrollment.course_id == payload.course_id
+    await _unlock_paid_enrollment(db, current_user.id, payload.course_id)
+    if pricing.get("coupon_code"):
+        await coupon_service.record_coupon_redemption(
+            db,
+            coupon_code=pricing["coupon_code"],
+            user_id=current_user.id,
+            course_id=payload.course_id,
+            original_amount=int(pricing["original_amount"]),
+            discount_amount=int(pricing["discount_amount"]),
+            final_amount=int(pricing["final_amount"]),
+            order_id=payload.razorpay_order_id,
         )
-    )
-    existing = enroll_res.scalars().first()
-    if existing:
-        if existing.enrollment_type != "paid":
-            existing.enrollment_type = "paid"
-            existing.expiry_date = None
-            await db.commit()
-        return {"message": "Payment verified. Course unlocked.", "status": "success"}
-
-    new_enrollment = models.Enrollment(
-        user_id=current_user.id,
-        course_id=payload.course_id,
-        enrollment_type="paid",
-        expiry_date=None
-    )
-    db.add(new_enrollment)
-    await db.commit()
     return {"message": "Payment verified. Course unlocked.", "status": "success"}
 
 @app.post("/api/v1/submit-assignment")
