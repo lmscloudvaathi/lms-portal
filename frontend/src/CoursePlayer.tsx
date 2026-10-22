@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import axios from "axios";
 import Editor from "@monaco-editor/react";
@@ -18,6 +18,7 @@ import {
 import { loadJetBrainsMonoFont } from './utils/loadFonts';
 import ThumbnailPicker from "./components/ThumbnailPicker";
 import CouponApply, { type AppliedCoupon } from "./components/CouponApply";
+import NativeQuizPlayer from "./components/NativeQuizPlayer";
 import {
     PlayCircle, FileText, ChevronLeft, Menu, Code, HelpCircle,
     UploadCloud, Play, Save, Monitor, Cpu, ChevronDown, ChevronRight, CreditCard,
@@ -445,13 +446,20 @@ const CodingPlayer = ({ course, token }: { course: any, token: string }) => {
                 try {
                     await downloadCertificatePdf(Number(courseId), course?.title || "certificate");
                     triggerToast(res.data.message || "Certificate issued and downloaded!", "success");
-                } catch {
-                    triggerToast(res.data.message || "Certificate issued! Click again to download.", "success");
+                } catch (downloadErr) {
+                    triggerToast(
+                        downloadErr instanceof Error
+                            ? downloadErr.message
+                            : (res.data.message || "Certificate issued! Click again to download."),
+                        downloadErr ? "error" : "success"
+                    );
                 }
             } else {
                 triggerToast(res.data.message, "error");
             }
-        } catch (e) { triggerToast("Failed to get certificate", "error"); }
+        } catch (e) {
+            triggerToast(e instanceof Error ? e.message : "Failed to get certificate", "error");
+        }
     };
 
     // 🟢 HANDLE RUN CODE (Dry Run)
@@ -772,7 +780,17 @@ const CodingPlayer = ({ course, token }: { course: any, token: string }) => {
     )
 };
 // --- ⏳ DELAYED PLAYER COMPONENT (Fixes the crash) ---
-const DelayedVideoPlayer = ({ lesson, plyrOptions }: { lesson: any, plyrOptions: any }) => {
+const DelayedVideoPlayer = ({
+    lesson,
+    plyrOptions,
+    alreadyCompleted = false,
+    onVideoComplete,
+}: {
+    lesson: any;
+    plyrOptions: any;
+    alreadyCompleted?: boolean;
+    onVideoComplete?: () => void;
+}) => {
     const [isReady, setIsReady] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -780,6 +798,17 @@ const DelayedVideoPlayer = ({ lesson, plyrOptions }: { lesson: any, plyrOptions:
     const plyrRef = useRef<any>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const plyrSourceRef = useRef<any>(null);
+    const completedRef = useRef(alreadyCompleted);
+
+    useEffect(() => {
+        completedRef.current = alreadyCompleted;
+    }, [alreadyCompleted, lesson.id]);
+
+    const markWatched = useCallback(() => {
+        if (completedRef.current) return;
+        completedRef.current = true;
+        onVideoComplete?.();
+    }, [onVideoComplete]);
 
     const getYoutubeId = (url: string) => {
         const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
@@ -798,9 +827,10 @@ const DelayedVideoPlayer = ({ lesson, plyrOptions }: { lesson: any, plyrOptions:
 
     useEffect(() => {
         setIsReady(false);
+        completedRef.current = alreadyCompleted;
         const timer = setTimeout(() => setIsReady(true), 1000);
         return () => clearTimeout(timer);
-    }, [lesson.id]);
+    }, [lesson.id, alreadyCompleted]);
 
     // 2️⃣ CUSTOM FULLSCREEN TOGGLE
     const toggleFullScreen = () => {
@@ -828,6 +858,62 @@ const DelayedVideoPlayer = ({ lesson, plyrOptions }: { lesson: any, plyrOptions:
             ? { type: "video" as const, sources: [{ src: videoId, provider: "youtube" as const }] }
             : null;
     }, [lesson.id, videoId]);
+
+    // Auto-complete when the learner finishes (or nearly finishes) a YouTube/Plyr video
+    useEffect(() => {
+        if (!isReady || !videoId || alreadyCompleted) return;
+
+        let cancelled = false;
+        let attachedPlayer: any = null;
+
+        const onEnded = () => markWatched();
+        const onTimeUpdate = (event?: any) => {
+            const player = event?.detail?.plyr || attachedPlayer || plyrRef.current?.plyr;
+            if (!player?.duration || player.duration <= 0) return;
+            if (player.currentTime / player.duration >= 0.92) markWatched();
+        };
+
+        const attach = () => {
+            if (cancelled) return false;
+            const player = plyrRef.current?.plyr;
+            if (!player || typeof player.on !== "function") return false;
+            attachedPlayer = player;
+            player.on("ended", onEnded);
+            player.on("timeupdate", onTimeUpdate);
+            return true;
+        };
+
+        let tries = 0;
+        const timer = window.setInterval(() => {
+            tries += 1;
+            if (attach() || tries > 40) window.clearInterval(timer);
+        }, 250);
+
+        return () => {
+            cancelled = true;
+            window.clearInterval(timer);
+            if (attachedPlayer && typeof attachedPlayer.off === "function") {
+                attachedPlayer.off("ended", onEnded);
+                attachedPlayer.off("timeupdate", onTimeUpdate);
+            }
+        };
+    }, [isReady, videoId, lesson.id, alreadyCompleted, markWatched]);
+
+    // Drive embeds can't report progress — fall back to lesson duration (minutes)
+    useEffect(() => {
+        if (!isReady || alreadyCompleted || !driveUrl) return;
+        const durationMinutes = Number(lesson.duration || 0);
+        if (!(durationMinutes > 0)) return;
+        const neededMs = Math.max(30, durationMinutes * 60 * 1000) * 0.9;
+        const startedAt = Date.now();
+        const timerId = window.setInterval(() => {
+            if (Date.now() - startedAt >= neededMs) {
+                markWatched();
+                window.clearInterval(timerId);
+            }
+        }, 5000);
+        return () => window.clearInterval(timerId);
+    }, [isReady, driveUrl, lesson.id, lesson.duration, alreadyCompleted, markWatched]);
 
     if (!videoId && !driveUrl) return <div className="text-white p-10">Invalid Video URL</div>;
 
@@ -1379,6 +1465,11 @@ const CoursePlayer = () => {
         if (activeLesson?.type === "code_test") loadJetBrainsMonoFont();
     }, [activeLesson?.type]);
 
+    // Quiz takes over the viewport — hide the curriculum sidebar while it's open
+    useEffect(() => {
+        if (activeLesson?.type === "quiz") setSidebarOpen(false);
+    }, [activeLesson?.id, activeLesson?.type]);
+
     const toggleModule = (moduleId: number) => setExpandedModules(prev => prev.includes(moduleId) ? prev.filter(id => id !== moduleId) : [...prev, moduleId]);
 
     const getEmbedUrl = (url: string) => {
@@ -1445,18 +1536,36 @@ const CoursePlayer = () => {
         } catch (err) { console.error("Upload Error:", err); triggerToast("❌ Upload Failed. Please try again.", "error"); } finally { setUploading(false); }
     };
 
-    const handleToggleComplete = async (lesson: any) => {
+    const handleMarkComplete = useCallback(async (lesson: any, opts?: { toastMessage?: string }) => {
+        if (!lesson?.id || lesson.is_completed) return;
         try {
             const token = localStorage.getItem("token");
             const res = await axios.post(`${API_BASE_URL}/content/${lesson.id}/complete`, {}, { headers: { Authorization: `Bearer ${token}` } });
             if (res.data?.certificate_issued) {
                 triggerToast("Course complete — your Cloudvaathi certificate was issued!", "success");
             } else {
-                triggerToast(lesson.is_completed ? "Marked as Incomplete" : "Marked as Complete!", "success");
+                triggerToast(opts?.toastMessage || "Lesson completed!", "success");
             }
             setRefreshTrigger(prev => prev + 1);
-        } catch (err) { triggerToast("Failed to update status", "error"); }
-    };
+        } catch {
+            /* auto-complete failures stay quiet; learner can rewatch */
+        }
+    }, []);
+
+    const handleVideoLessonComplete = useCallback(() => {
+        if (!activeLesson || activeLesson.is_completed) return;
+        void handleMarkComplete(activeLesson, { toastMessage: "Lesson completed after watching the full video." });
+    }, [activeLesson, handleMarkComplete]);
+
+    // Notes: mark complete when the learner opens and views them (quizzes complete via pass score)
+    useEffect(() => {
+        if (!activeLesson?.id || activeLesson.is_completed) return;
+        if (activeLesson.type !== "note") return;
+        const timer = window.setTimeout(() => {
+            void handleMarkComplete(activeLesson, { toastMessage: "Lesson completed." });
+        }, 2500);
+        return () => window.clearTimeout(timer);
+    }, [activeLesson?.id, activeLesson?.type, activeLesson?.is_completed, handleMarkComplete]);
 
     const handleClaimCertificate = async () => {
         try {
@@ -1472,11 +1581,18 @@ const CoursePlayer = () => {
                 try {
                     await downloadCertificatePdf(Number(courseId), course?.title || "certificate");
                     triggerToast(res.data.message || "Certificate issued and downloaded!", "success");
-                } catch {
-                    triggerToast(res.data.message || "Certificate issued! Click again to download.", "success");
+                } catch (downloadErr) {
+                    triggerToast(
+                        downloadErr instanceof Error
+                            ? downloadErr.message
+                            : (res.data.message || "Certificate issued! Click again to download."),
+                        "error"
+                    );
                 }
             } else { triggerToast(res.data.message || "Course not yet complete.", "error"); }
-        } catch (err) { triggerToast("Failed to get certificate.", "error"); }
+        } catch (err) {
+            triggerToast(err instanceof Error ? err.message : "Failed to get certificate.", "error");
+        }
     };
 
     const isCourseFullyComplete = useMemo(() => {
@@ -1495,13 +1611,58 @@ const CoursePlayer = () => {
         if (!activeLesson) return <div className="text-white p-10 text-center">Select a lesson</div>;
         if (isTransitioning) return <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900 text-white gap-4"><div className="w-10 h-10 border-4 border-[#005EB8] border-t-transparent rounded-full animate-spin"></div><p className="text-sm font-bold tracking-wider animate-pulse text-slate-400">LOADING...</p></div>;
 
+        const isVideoLesson = activeLesson.type === "video" || activeLesson.type === "live_class";
+
+        // Quiz uses its own fullscreen shell (NativeQuizPlayer) — skip player chrome
+        if (activeLesson.type === "quiz") {
+            return (
+                <NativeQuizPlayer
+                    key={activeLesson.id}
+                    lessonId={activeLesson.id}
+                    lessonTitle={activeLesson.title}
+                    onBack={() => {
+                        setSidebarOpen(true);
+                        navigate(`/course/${courseId}`);
+                    }}
+                    onCompleted={({ certificate_issued }) => {
+                        if (certificate_issued) {
+                            triggerToast("Course complete — your Cloudvaathi certificate was issued!", "success");
+                        } else {
+                            triggerToast("Quiz passed — lesson marked complete!", "success");
+                        }
+                        setRefreshTrigger((prev) => prev + 1);
+                    }}
+                />
+            );
+        }
+
         const completionHeader = (
-            <div className="bg-slate-50 border-b border-slate-200 p-4 flex justify-between items-center">
+            <div className="bg-slate-50 border-b border-slate-200 p-4 flex justify-between items-center gap-3">
                 <h3 className="font-bold text-slate-800">{activeLesson.title}</h3>
-                <div onClick={() => handleToggleComplete(activeLesson)} className={`flex items-center gap-2 px-4 py-2 rounded-lg cursor-pointer transition-all border ${activeLesson.is_completed ? "bg-green-100 border-green-300 text-green-700" : "bg-white border-slate-300 text-slate-500 hover:bg-slate-100"}`}>
-                    {activeLesson.is_completed ? <CheckSquare size={20} /> : <Square size={20} />}
-                    <span className="text-sm font-bold">{activeLesson.is_completed ? "Completed" : "Mark as Complete"}</span>
-                </div>
+                {activeLesson.type === "assignment" ? null : (
+                    <div
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${
+                            activeLesson.is_completed
+                                ? "bg-green-100 border-green-300 text-green-700"
+                                : "bg-white border-slate-200 text-slate-500"
+                        }`}
+                    >
+                        {activeLesson.is_completed ? (
+                            <CheckSquare size={20} />
+                        ) : isVideoLesson ? (
+                            <PlayCircle size={20} />
+                        ) : (
+                            <Square size={20} />
+                        )}
+                        <span className="text-sm font-bold">
+                            {activeLesson.is_completed
+                                ? "Completed"
+                                : isVideoLesson
+                                  ? "Watch full video to complete"
+                                  : "In progress"}
+                        </span>
+                    </div>
+                )}
             </div>
         );
 
@@ -1509,13 +1670,18 @@ const CoursePlayer = () => {
         if (activeLesson.type === "note") {
             contentBody = (<div className="w-full h-full relative"><iframe src={getEmbedUrl(activeLesson.url)} width="100%" height="100%" className="bg-white border-0" allow="autoplay" /><div style={{ position: "absolute", top: 0, right: 0, width: "65px", height: "60px", background: "#202124", zIndex: 50 }}></div></div>);
         }
-        else if (activeLesson.type === "quiz") contentBody = (<div className="w-full h-full bg-slate-50 flex flex-col items-center justify-center p-4"><iframe src={getEmbedUrl(activeLesson.url)} width="100%" height="100%" frameBorder="0" className="rounded-xl shadow-sm border border-slate-200 bg-white max-w-4xl" allowFullScreen sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation">Loading...</iframe></div>);
         else if (activeLesson.type === "video" || activeLesson.type === "live_class") {
             const resourceLinks = getResourceLinks(activeLesson);
             contentBody = (
                 <div className="h-full overflow-y-auto bg-slate-100 p-4 lg:p-6">
                     <div className="max-w-5xl mx-auto bg-black rounded-xl overflow-hidden shadow-xl">
-                        <DelayedVideoPlayer key={activeLesson.id} lesson={activeLesson} plyrOptions={plyrOptions} />
+                        <DelayedVideoPlayer
+                            key={activeLesson.id}
+                            lesson={activeLesson}
+                            plyrOptions={plyrOptions}
+                            alreadyCompleted={Boolean(activeLesson.is_completed)}
+                            onVideoComplete={handleVideoLessonComplete}
+                        />
                     </div>
                     {resourceLinks.length > 0 && (
                         <div className="max-w-5xl mx-auto mt-4 bg-white border border-slate-200 rounded-xl p-4">

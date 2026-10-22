@@ -102,11 +102,25 @@ async def _ensure_certificate_columns(conn):
             pass
 
 
+async def _ensure_quiz_columns(conn):
+    """Add pass_percent on content_items for existing DBs (create_all won't alter columns)."""
+    if IS_SQLITE:
+        stmts = ("ALTER TABLE content_items ADD COLUMN pass_percent INTEGER DEFAULT 70",)
+    else:
+        stmts = ("ALTER TABLE content_items ADD COLUMN IF NOT EXISTS pass_percent INTEGER DEFAULT 70;",)
+    for stmt in stmts:
+        try:
+            await conn.execute(text(stmt))
+        except Exception:
+            pass
+
+
 async def init_models():
     async with engine.begin() as conn:
         # 1. Create tables if they don't exist
         await conn.run_sync(models.Base.metadata.create_all)
         await _ensure_certificate_columns(conn)
+        await _ensure_quiz_columns(conn)
         if IS_SQLITE:
             print("Local SQLite database ready.")
             return
@@ -124,6 +138,7 @@ async def init_models():
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMP;"))
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(255);"))
             await conn.execute(text("ALTER TABLE content_items ADD COLUMN IF NOT EXISTS resource_links TEXT;"))
+            await conn.execute(text("ALTER TABLE content_items ADD COLUMN IF NOT EXISTS pass_percent INTEGER DEFAULT 70;"))
             await conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS category VARCHAR(64);"))
             await _ensure_certificate_columns(conn)
             try:
@@ -292,6 +307,39 @@ class ContentCreate(BaseModel):
     # ✅ NEW
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+    pass_percent: Optional[int] = 70
+
+
+class QuizOptionInput(BaseModel):
+    label: str
+    is_correct: bool = False
+    order: Optional[int] = 0
+    id: Optional[int] = None
+
+
+class QuizQuestionInput(BaseModel):
+    prompt: str
+    question_type: str = "single"  # single | true_false | multi
+    points: int = 1
+    order: Optional[int] = 0
+    options: List[QuizOptionInput] = []
+    id: Optional[int] = None
+
+
+class QuizPutRequest(BaseModel):
+    questions: List[QuizQuestionInput]
+    pass_percent: Optional[int] = None
+    duration: Optional[int] = None
+    title: Optional[str] = None
+
+
+class QuizSubmitAnswer(BaseModel):
+    question_id: int
+    selected_option_ids: List[int] = []
+
+
+class QuizSubmitRequest(BaseModel):
+    answers: List[QuizSubmitAnswer] = []
 
 class ViolationReport(BaseModel):
     lesson_id: int
@@ -539,11 +587,28 @@ def _is_staff(user: models.User) -> bool:
 
 
 def serialize_module(module: models.Module) -> dict:
+    items = sorted(
+        list(getattr(module, "items", None) or []),
+        key=lambda item: (
+            item.order is None,
+            item.order if item.order is not None else 10**9,
+            item.id,
+        ),
+    )
     return {
         "id": module.id,
         "title": module.title,
         "order": module.order,
         "course_id": module.course_id,
+        "items": [
+            {
+                "id": item.id,
+                "title": item.title,
+                "type": item.type,
+                "order": item.order,
+            }
+            for item in items
+        ],
     }
 
 
@@ -1446,14 +1511,17 @@ async def reorder_modules(course_id: int, req: ReorderModulesRequest, db: AsyncS
 async def get_modules(course_id: int, db: AsyncSession = Depends(get_db)):
     res = await db.execute(
         select(models.Module)
+        .options(selectinload(models.Module.items))
         .where(models.Module.course_id == course_id)
         .order_by(models.Module.order, models.Module.id)
     )
-    return [serialize_module(m) for m in res.scalars().all()]
+    return [serialize_module(m) for m in res.scalars().unique().all()]
 
 @app.post("/api/v1/content")
 async def add_content(content: ContentCreate, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
     cleaned_resource_links = normalize_resource_links(content.resource_links)
+    pass_pct = content.pass_percent if content.pass_percent is not None else 70
+    pass_pct = max(0, min(100, int(pass_pct)))
     new_content = models.ContentItem(
         title=content.title, 
         type=content.type, 
@@ -1467,11 +1535,13 @@ async def add_content(content: ContentCreate, db: AsyncSession = Depends(get_db)
         resource_links=json.dumps(cleaned_resource_links) if cleaned_resource_links else None,
         # ✅ Save Times
         start_time=content.start_time,
-        end_time=content.end_time
+        end_time=content.end_time,
+        pass_percent=pass_pct if content.type == "quiz" else None,
     )
     db.add(new_content)
     await db.commit()
-    return {"message": "Content added"}
+    await db.refresh(new_content)
+    return {"message": "Content added", "id": new_content.id}
 
 @app.patch("/api/v1/courses/{course_id}/publish")
 async def publish_course(course_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(require_instructor)):
@@ -1633,11 +1703,15 @@ async def add_items_from_library(
             resource_links=src.resource_links,
             start_time=src.start_time,
             end_time=src.end_time,
+            pass_percent=src.pass_percent,
             order=next_order,
             module_id=payload.module_id,
         )
         next_order += 1
         db.add(cloned)
+        await db.flush()
+        if src.type == "quiz":
+            await _clone_quiz_questions(db, src.id, cloned.id)
         created_items.append(cloned)
 
     await db.commit()
@@ -1706,10 +1780,14 @@ async def import_modules_from_library(
                 resource_links=src_item.resource_links,
                 start_time=src_item.start_time,
                 end_time=src_item.end_time,
+                pass_percent=src_item.pass_percent,
                 order=idx,
                 module_id=new_module.id,
             )
             db.add(new_item)
+            await db.flush()
+            if src_item.type == "quiz":
+                await _clone_quiz_questions(db, src_item.id, new_item.id)
         imported_modules += 1
 
     await db.commit()
@@ -1806,7 +1884,8 @@ async def get_course_player(course_id: int, db: AsyncSession = Depends(get_db), 
                         "instructions": c.instructions, 
                         "resource_links": parse_resource_links(c.resource_links),
                         "duration": c.duration, 
-                        "is_mandatory": c.is_mandatory, 
+                        "is_mandatory": c.is_mandatory,
+                        "pass_percent": c.pass_percent if c.pass_percent is not None else 70,
                         "is_completed": c.id in completed_ids,
                         "start_time": c.start_time,
                         "end_time": c.end_time,
@@ -2155,28 +2234,58 @@ async def enroll_student(course_id: int, req: EnrollmentRequest, db: AsyncSessio
 
 @app.get("/api/v1/generate-pdf/{course_id}")
 async def generate_pdf_endpoint(course_id: int, db: AsyncSession = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    cert_res = await db.execute(select(models.UserCertificate).where(
-        models.UserCertificate.user_id == current_user.id,
-        models.UserCertificate.course_id == course_id
-    ))
-    certificate = cert_res.scalars().first()
-
-    if not certificate:
-        raise HTTPException(status_code=403, detail="Certificate not yet earned. Complete the course to receive it automatically.")
-
     course_res = await db.execute(select(models.Course).where(models.Course.id == course_id))
     course = course_res.scalars().first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
 
+    await _ensure_enrolled_or_staff(current_user, course_id, db)
+
+    # Issue on demand when the learner has finished the course (any course type).
+    certificate = await certificate_service.get_user_certificate(db, current_user.id, course_id)
+    if not certificate:
+        certificate = await certificate_service.issue_certificate_if_eligible(
+            db,
+            current_user,
+            course_id,
+            generate_pdf=True,
+            send_email=False,
+            require_complete=True,
+        )
+    if not certificate:
+        completed, total, _is_done = await check_progress_status(current_user.id, course_id, db)
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Complete the course first to unlock your certificate ({completed}/{total} lessons done)."
+                if total
+                else "Complete the course first to unlock your certificate."
+            ),
+        )
+
     try:
         pdf_path = await certificate_service.ensure_certificate_pdf(db, certificate, current_user, course)
     except Exception as exc:
         logger.exception("Certificate PDF error: %s", exc)
+        detail = str(exc).strip()
+        if "Chromium" in detail or "Playwright" in detail:
+            raise HTTPException(
+                status_code=500,
+                detail="Certificate PDF engine is not ready on the server. Please contact support or try again shortly.",
+            )
         raise HTTPException(status_code=500, detail="Could not generate the certificate PDF. Please try again.")
 
-    filename = f"{(course.title or 'certificate').replace(' ', '_')}_{certificate.certificate_id}.pdf"
-    return FileResponse(path=str(pdf_path), media_type="application/pdf", filename=filename)
+    if not pdf_path.exists() or pdf_path.stat().st_size <= 0:
+        raise HTTPException(status_code=500, detail="Certificate PDF is missing. Please try again.")
+
+    safe_title = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in (course.title or "certificate"))
+    filename = f"{safe_title}_{certificate.certificate_id}.pdf"
+    return FileResponse(
+        path=str(pdf_path),
+        media_type="application/pdf",
+        filename=filename,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/api/v1/certificates/verify/{credential_id}")
@@ -2217,6 +2326,10 @@ async def get_my_courses(db: AsyncSession = Depends(get_db), current_user: model
                 if delta.total_seconds() <= 0:
                     is_trial_expired = True
 
+            lessons_completed, lessons_total, is_complete = await check_progress_status(
+                current_user.id, e.course.id, db
+            )
+            has_cert = e.course.id in earned_certs
             course_data = {
                 "id": e.course.id,
                 "title": e.course.title,
@@ -2231,8 +2344,12 @@ async def get_my_courses(db: AsyncSession = Depends(get_db), current_user: model
                 "enrollment_type": e.enrollment_type, # "paid" or "trial"
                 "days_left": days_left,
                 "is_trial_expired": is_trial_expired,
-                "has_certificate": e.course.id in earned_certs,
-                "certificate_id": earned_certs[e.course.id].certificate_id if e.course.id in earned_certs else None,
+                "has_certificate": has_cert,
+                "certificate_id": earned_certs[e.course.id].certificate_id if has_cert else None,
+                "lessons_completed": lessons_completed,
+                "lessons_total": lessons_total,
+                "is_course_complete": bool(is_complete),
+                "certificate_eligible": bool(is_complete or has_cert),
             }
             if _is_student(current_user):
                 course_data["price"] = int(e.course.price or 0)
@@ -2268,6 +2385,30 @@ async def delete_content(content_id: int, db: AsyncSession = Depends(get_db), cu
         # Delete related Submissions (if it was an assignment)
         await db.execute(
             delete(models.Submission).where(models.Submission.content_item_id == content_id)
+        )
+
+        # Delete native quiz attempts / answers / questions / options
+        attempt_ids_res = await db.execute(
+            select(models.QuizAttempt.id).where(models.QuizAttempt.content_item_id == content_id)
+        )
+        attempt_ids = list(attempt_ids_res.scalars().all())
+        if attempt_ids:
+            await db.execute(
+                delete(models.QuizAnswer).where(models.QuizAnswer.attempt_id.in_(attempt_ids))
+            )
+        await db.execute(
+            delete(models.QuizAttempt).where(models.QuizAttempt.content_item_id == content_id)
+        )
+        q_ids_res = await db.execute(
+            select(models.QuizQuestion.id).where(models.QuizQuestion.content_item_id == content_id)
+        )
+        q_ids = list(q_ids_res.scalars().all())
+        if q_ids:
+            await db.execute(
+                delete(models.QuizOption).where(models.QuizOption.question_id.in_(q_ids))
+            )
+        await db.execute(
+            delete(models.QuizQuestion).where(models.QuizQuestion.content_item_id == content_id)
         )
 
         # 3. Now delete the actual item
@@ -3018,6 +3159,571 @@ async def mark_item_complete(item_id: int, db: AsyncSession = Depends(get_db), c
     if cert:
         payload["certificate"] = certificate_service.serialize_certificate(cert)
     return payload
+
+
+# --- Native Quiz helpers & APIs ---
+
+VALID_QUIZ_TYPES = {"single", "true_false", "multi"}
+
+
+async def _clone_quiz_questions(db: AsyncSession, source_item_id: int, target_item_id: int):
+    """Copy quiz questions/options from one content item to another (library clone)."""
+    questions = await _load_quiz_questions(source_item_id, db)
+    for q in questions:
+        nq = models.QuizQuestion(
+            content_item_id=target_item_id,
+            prompt=q.prompt,
+            question_type=q.question_type,
+            order=q.order,
+            points=q.points or 1,
+        )
+        db.add(nq)
+        await db.flush()
+        for o in sorted(q.options or [], key=lambda x: (x.order is None, x.order if x.order is not None else 10**9, x.id)):
+            db.add(
+                models.QuizOption(
+                    question_id=nq.id,
+                    label=o.label,
+                    is_correct=bool(o.is_correct),
+                    order=o.order,
+                )
+            )
+
+
+async def _get_quiz_item_with_course(item_id: int, db: AsyncSession):
+    res = await db.execute(
+        select(models.ContentItem, models.Module, models.Course)
+        .join(models.Module, models.ContentItem.module_id == models.Module.id)
+        .join(models.Course, models.Module.course_id == models.Course.id)
+        .where(models.ContentItem.id == item_id)
+    )
+    row = res.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Content item not found")
+    item, module, course = row
+    return item, module, course
+
+
+async def _ensure_enrolled_or_staff(user: models.User, course_id: int, db: AsyncSession):
+    if _is_staff(user):
+        return
+    enrol = await db.execute(
+        select(models.Enrollment).where(
+            models.Enrollment.user_id == user.id,
+            models.Enrollment.course_id == course_id,
+        )
+    )
+    if not enrol.scalars().first():
+        raise HTTPException(status_code=403, detail="Not enrolled in this course")
+
+
+def _serialize_quiz_question(q: models.QuizQuestion, include_correct: bool = True) -> dict:
+    opts = sorted(q.options or [], key=lambda o: (o.order is None, o.order if o.order is not None else 10**9, o.id))
+    return {
+        "id": q.id,
+        "prompt": q.prompt,
+        "question_type": q.question_type,
+        "order": q.order,
+        "points": q.points or 1,
+        "options": [
+            {
+                "id": o.id,
+                "label": o.label,
+                "order": o.order,
+                **({"is_correct": bool(o.is_correct)} if include_correct else {}),
+            }
+            for o in opts
+        ],
+    }
+
+
+def _grade_selection(question: models.QuizQuestion, selected_ids: List[int]) -> Tuple[bool, int]:
+    correct_ids = {o.id for o in (question.options or []) if o.is_correct}
+    selected_set = set(selected_ids or [])
+    points = question.points or 1
+    if question.question_type == "multi":
+        ok = selected_set == correct_ids and len(correct_ids) > 0
+    else:
+        # single / true_false: exactly one correct option
+        ok = len(selected_set) == 1 and selected_set == correct_ids
+    return ok, (points if ok else 0)
+
+
+async def _load_quiz_questions(item_id: int, db: AsyncSession) -> List[models.QuizQuestion]:
+    res = await db.execute(
+        select(models.QuizQuestion)
+        .options(selectinload(models.QuizQuestion.options))
+        .where(models.QuizQuestion.content_item_id == item_id)
+        .order_by(models.QuizQuestion.order, models.QuizQuestion.id)
+    )
+    return list(res.scalars().all())
+
+
+@app.get("/api/v1/content/{item_id}/quiz")
+async def get_quiz_admin(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    item, _module, course = await _get_quiz_item_with_course(item_id, db)
+    if not _can_manage_course(current_user, course):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if item.type != "quiz":
+        raise HTTPException(status_code=400, detail="Item is not a quiz")
+    questions = await _load_quiz_questions(item_id, db)
+    return {
+        "content_item_id": item.id,
+        "title": item.title,
+        "duration": item.duration,
+        "pass_percent": item.pass_percent if item.pass_percent is not None else 70,
+        "questions": [_serialize_quiz_question(q, include_correct=True) for q in questions],
+    }
+
+
+@app.put("/api/v1/content/{item_id}/quiz")
+async def put_quiz_admin(
+    item_id: int,
+    body: QuizPutRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    item, _module, course = await _get_quiz_item_with_course(item_id, db)
+    if not _can_manage_course(current_user, course):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if item.type != "quiz":
+        raise HTTPException(status_code=400, detail="Item is not a quiz")
+
+    if body.title is not None and body.title.strip():
+        item.title = body.title.strip()
+    if body.duration is not None:
+        item.duration = body.duration
+    if body.pass_percent is not None:
+        item.pass_percent = max(0, min(100, int(body.pass_percent)))
+    elif item.pass_percent is None:
+        item.pass_percent = 70
+
+    # Replace question set (attempts keep historical answers by question_id; new ids after replace)
+    existing_qs = await _load_quiz_questions(item_id, db)
+    existing_q_ids = [q.id for q in existing_qs]
+    if existing_q_ids:
+        await db.execute(delete(models.QuizOption).where(models.QuizOption.question_id.in_(existing_q_ids)))
+        await db.execute(delete(models.QuizQuestion).where(models.QuizQuestion.id.in_(existing_q_ids)))
+        await db.flush()
+
+    for qi, q_in in enumerate(body.questions or []):
+        qtype = (q_in.question_type or "single").strip().lower()
+        if qtype not in VALID_QUIZ_TYPES:
+            raise HTTPException(status_code=400, detail=f"Invalid question_type: {qtype}")
+        prompt = (q_in.prompt or "").strip()
+        if not prompt:
+            raise HTTPException(status_code=400, detail=f"Question {qi + 1} is missing a prompt")
+
+        options_in = [
+            {"label": (o.label or "").strip(), "is_correct": bool(o.is_correct), "order": o.order if o.order is not None else i}
+            for i, o in enumerate(q_in.options or [])
+        ]
+        if qtype == "true_false":
+            if len(options_in) < 2:
+                options_in = [
+                    {"label": "True", "is_correct": False, "order": 0},
+                    {"label": "False", "is_correct": False, "order": 1},
+                ]
+            if not any(o["is_correct"] for o in options_in):
+                options_in[0]["is_correct"] = True
+
+        if len(options_in) < 2:
+            raise HTTPException(status_code=400, detail=f"Question {qi + 1} needs at least 2 options")
+
+        correct_count = sum(1 for o in options_in if o["is_correct"])
+        if qtype == "multi":
+            if correct_count < 1:
+                raise HTTPException(status_code=400, detail=f"Question {qi + 1}: mark at least one correct option")
+        else:
+            if correct_count != 1:
+                raise HTTPException(status_code=400, detail=f"Question {qi + 1}: mark exactly one correct option")
+
+        q = models.QuizQuestion(
+            content_item_id=item.id,
+            prompt=prompt,
+            question_type=qtype,
+            order=q_in.order if q_in.order is not None else qi,
+            points=max(1, int(q_in.points or 1)),
+        )
+        db.add(q)
+        await db.flush()
+        for oi, o_in in enumerate(options_in):
+            label = o_in["label"]
+            if not label:
+                raise HTTPException(status_code=400, detail=f"Question {qi + 1} has an empty option")
+            db.add(
+                models.QuizOption(
+                    question_id=q.id,
+                    label=label,
+                    is_correct=bool(o_in["is_correct"]),
+                    order=int(o_in["order"]) if o_in["order"] is not None else oi,
+                )
+            )
+
+    await db.commit()
+    questions = await _load_quiz_questions(item_id, db)
+    return {
+        "message": "Quiz saved",
+        "content_item_id": item.id,
+        "pass_percent": item.pass_percent if item.pass_percent is not None else 70,
+        "questions": [_serialize_quiz_question(q, include_correct=True) for q in questions],
+    }
+
+
+@app.get("/api/v1/content/{item_id}/quiz/take")
+async def get_quiz_take(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    item, _module, course = await _get_quiz_item_with_course(item_id, db)
+    if item.type != "quiz":
+        raise HTTPException(status_code=400, detail="Item is not a quiz")
+    await _ensure_enrolled_or_staff(current_user, course.id, db)
+    questions = await _load_quiz_questions(item_id, db)
+    return {
+        "content_item_id": item.id,
+        "title": item.title,
+        "duration": item.duration,
+        "pass_percent": item.pass_percent if item.pass_percent is not None else 70,
+        "question_count": len(questions),
+        "questions": [_serialize_quiz_question(q, include_correct=False) for q in questions],
+    }
+
+
+@app.get("/api/v1/content/{item_id}/quiz/my-attempts")
+async def get_my_quiz_attempts(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    item, _module, course = await _get_quiz_item_with_course(item_id, db)
+    if item.type != "quiz":
+        raise HTTPException(status_code=400, detail="Item is not a quiz")
+    await _ensure_enrolled_or_staff(current_user, course.id, db)
+
+    res = await db.execute(
+        select(models.QuizAttempt)
+        .where(
+            models.QuizAttempt.content_item_id == item_id,
+            models.QuizAttempt.user_id == current_user.id,
+        )
+        .order_by(models.QuizAttempt.submitted_at.desc(), models.QuizAttempt.id.desc())
+    )
+    attempts = list(res.scalars().all())
+    best = max((a.percent or 0 for a in attempts), default=None)
+    pass_pct = item.pass_percent if item.pass_percent is not None else 70
+    return {
+        "content_item_id": item.id,
+        "pass_percent": pass_pct,
+        "attempt_count": len(attempts),
+        "best_percent": best,
+        "passed": best is not None and best >= pass_pct,
+        "attempts": [
+            {
+                "id": a.id,
+                "score": a.score,
+                "max_score": a.max_score,
+                "percent": a.percent,
+                "submitted_at": a.submitted_at.isoformat() if a.submitted_at else None,
+            }
+            for a in attempts
+        ],
+    }
+
+
+@app.post("/api/v1/content/{item_id}/quiz/submit")
+async def submit_quiz(
+    item_id: int,
+    body: QuizSubmitRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    item, _module, course = await _get_quiz_item_with_course(item_id, db)
+    if item.type != "quiz":
+        raise HTTPException(status_code=400, detail="Item is not a quiz")
+    await _ensure_enrolled_or_staff(current_user, course.id, db)
+
+    questions = await _load_quiz_questions(item_id, db)
+    if not questions:
+        raise HTTPException(status_code=400, detail="This quiz has no questions yet")
+
+    answer_map = {a.question_id: list(a.selected_option_ids or []) for a in (body.answers or [])}
+    total_points = 0
+    earned = 0
+    review = []
+
+    attempt = models.QuizAttempt(
+        content_item_id=item.id,
+        user_id=current_user.id,
+        score=0,
+        max_score=0,
+        percent=0,
+        started_at=datetime.utcnow(),
+        submitted_at=datetime.utcnow(),
+    )
+    db.add(attempt)
+    await db.flush()
+
+    for q in questions:
+        selected = answer_map.get(q.id, [])
+        # Validate option ids belong to this question
+        valid_ids = {o.id for o in (q.options or [])}
+        selected = [sid for sid in selected if sid in valid_ids]
+        ok, pts = _grade_selection(q, selected)
+        q_points = q.points or 1
+        total_points += q_points
+        earned += pts
+        db.add(
+            models.QuizAnswer(
+                attempt_id=attempt.id,
+                question_id=q.id,
+                selected_option_ids=json.dumps(selected),
+                is_correct=ok,
+                points_awarded=pts,
+            )
+        )
+        correct_opts = [o for o in (q.options or []) if o.is_correct]
+        selected_opts = [o for o in (q.options or []) if o.id in set(selected)]
+        review.append({
+            "question_id": q.id,
+            "prompt": q.prompt,
+            "question_type": q.question_type,
+            "points": q_points,
+            "points_awarded": pts,
+            "is_correct": ok,
+            "selected_options": [{"id": o.id, "label": o.label} for o in selected_opts],
+            "correct_options": [{"id": o.id, "label": o.label} for o in correct_opts],
+        })
+
+    percent = 0 if total_points == 0 else round((earned / total_points) * 100)
+    attempt.score = earned
+    attempt.max_score = total_points
+    attempt.percent = percent
+
+    pass_pct = item.pass_percent if item.pass_percent is not None else 70
+
+    # Best score across attempts (including this one)
+    prior = await db.execute(
+        select(models.QuizAttempt.percent).where(
+            models.QuizAttempt.content_item_id == item.id,
+            models.QuizAttempt.user_id == current_user.id,
+            models.QuizAttempt.id != attempt.id,
+        )
+    )
+    prior_percents = list(prior.scalars().all())
+    best_percent = max([percent] + [p or 0 for p in prior_percents])
+
+    certificate_issued = False
+    cert_payload = None
+    if best_percent >= pass_pct:
+        prog_res = await db.execute(
+            select(models.LessonProgress).where(
+                models.LessonProgress.user_id == current_user.id,
+                models.LessonProgress.content_item_id == item.id,
+            )
+        )
+        progress = prog_res.scalars().first()
+        if not progress:
+            db.add(
+                models.LessonProgress(
+                    user_id=current_user.id,
+                    content_item_id=item.id,
+                    is_completed=True,
+                )
+            )
+        else:
+            progress.is_completed = True
+        await db.flush()
+        cert = await certificate_service.issue_after_content_complete(db, current_user, item.id)
+        certificate_issued = bool(cert)
+        if cert:
+            cert_payload = certificate_service.serialize_certificate(cert)
+
+    await db.commit()
+
+    return {
+        "attempt_id": attempt.id,
+        "score": earned,
+        "max_score": total_points,
+        "percent": percent,
+        "best_percent": best_percent,
+        "pass_percent": pass_pct,
+        "passed": percent >= pass_pct,
+        "lesson_completed": best_percent >= pass_pct,
+        "certificate_issued": certificate_issued,
+        "certificate": cert_payload,
+        "review": review,
+    }
+
+
+@app.get("/api/v1/quiz-attempts/{attempt_id}")
+async def get_quiz_attempt_detail(
+    attempt_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    res = await db.execute(
+        select(models.QuizAttempt)
+        .options(selectinload(models.QuizAttempt.answers))
+        .where(models.QuizAttempt.id == attempt_id)
+    )
+    attempt = res.scalars().first()
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Attempt not found")
+
+    item, _module, course = await _get_quiz_item_with_course(attempt.content_item_id, db)
+    is_owner = attempt.user_id == current_user.id
+    is_staff = _can_manage_course(current_user, course)
+    if not is_owner and not is_staff:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    questions = await _load_quiz_questions(item.id, db)
+    q_map = {q.id: q for q in questions}
+    answer_rows = []
+    for ans in attempt.answers or []:
+        try:
+            selected_ids = json.loads(ans.selected_option_ids or "[]")
+        except Exception:
+            selected_ids = []
+        q = q_map.get(ans.question_id)
+        if not q:
+            continue
+        selected_opts = [o for o in (q.options or []) if o.id in set(selected_ids)]
+        correct_opts = [o for o in (q.options or []) if o.is_correct]
+        answer_rows.append({
+            "question_id": q.id,
+            "prompt": q.prompt,
+            "question_type": q.question_type,
+            "is_correct": ans.is_correct,
+            "points_awarded": ans.points_awarded,
+            "points": q.points or 1,
+            "selected_options": [{"id": o.id, "label": o.label} for o in selected_opts],
+            "correct_options": [{"id": o.id, "label": o.label} for o in correct_opts],
+        })
+
+    student_res = await db.execute(select(models.User).where(models.User.id == attempt.user_id))
+    student = student_res.scalars().first()
+
+    return {
+        "id": attempt.id,
+        "content_item_id": attempt.content_item_id,
+        "quiz_title": item.title,
+        "score": attempt.score,
+        "max_score": attempt.max_score,
+        "percent": attempt.percent,
+        "submitted_at": attempt.submitted_at.isoformat() if attempt.submitted_at else None,
+        "student": {
+            "id": student.id if student else None,
+            "name": student.full_name if student else None,
+            "email": student.email if student else None,
+        },
+        "answers": answer_rows,
+    }
+
+
+@app.get("/api/v1/courses/{course_id}/quiz-responses")
+async def get_course_quiz_responses(
+    course_id: int,
+    content_item_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    course_res = await db.execute(select(models.Course).where(models.Course.id == course_id))
+    course = course_res.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if not _can_manage_course(current_user, course):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    mods = await db.execute(
+        select(models.Module)
+        .options(selectinload(models.Module.items))
+        .where(models.Module.course_id == course_id)
+    )
+    modules = list(mods.scalars().all())
+    quizzes = []
+    for m in modules:
+        for item in (m.items or []):
+            if item.type == "quiz":
+                if content_item_id is not None and item.id != content_item_id:
+                    continue
+                quizzes.append(item)
+
+    quiz_ids = [q.id for q in quizzes]
+    attempts_by_quiz: Dict[int, list] = {qid: [] for qid in quiz_ids}
+    if quiz_ids:
+        att_res = await db.execute(
+            select(models.QuizAttempt, models.User)
+            .join(models.User, models.QuizAttempt.user_id == models.User.id)
+            .where(models.QuizAttempt.content_item_id.in_(quiz_ids))
+            .order_by(models.QuizAttempt.submitted_at.desc())
+        )
+        for attempt, user in att_res.all():
+            attempts_by_quiz.setdefault(attempt.content_item_id, []).append({
+                "id": attempt.id,
+                "score": attempt.score,
+                "max_score": attempt.max_score,
+                "percent": attempt.percent,
+                "submitted_at": attempt.submitted_at.isoformat() if attempt.submitted_at else None,
+                "student_id": user.id,
+                "student_name": user.full_name,
+                "student_email": user.email,
+            })
+
+    # Attempt numbers per student (chronological)
+    payload_quizzes = []
+    for q in quizzes:
+        attempts = attempts_by_quiz.get(q.id, [])
+        # Compute attempt # from oldest to newest per student
+        chron = sorted(
+            attempts,
+            key=lambda a: (a.get("submitted_at") or "", a["id"]),
+        )
+        counters: Dict[int, int] = {}
+        numbered = {}
+        for a in chron:
+            sid = a["student_id"]
+            counters[sid] = counters.get(sid, 0) + 1
+            numbered[a["id"]] = counters[sid]
+        for a in attempts:
+            a["attempt_number"] = numbered.get(a["id"], 1)
+        payload_quizzes.append({
+            "content_item_id": q.id,
+            "title": q.title,
+            "pass_percent": q.pass_percent if q.pass_percent is not None else 70,
+            "attempt_count": len(attempts),
+            "attempts": attempts,
+        })
+
+    return {
+        "course_id": course.id,
+        "course_title": course.title,
+        "quizzes": payload_quizzes,
+    }
+
+
+@app.get("/api/v1/instructor/quiz-courses")
+async def list_instructor_quiz_courses(
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    """All draft + published courses for Quiz Responses (excludes coding courses)."""
+    from sqlalchemy import or_
+
+    res = await db.execute(
+        select(models.Course.id, models.Course.title, models.Course.is_published)
+        .where(or_(models.Course.course_type.is_(None), models.Course.course_type != "coding"))
+        .order_by(models.Course.title.asc())
+    )
+    return [
+        {"id": row[0], "title": row[1], "is_published": bool(row[2])}
+        for row in res.all()
+    ]
 
 
 # 2. Final Course Completion (The "Complete Course" Button)

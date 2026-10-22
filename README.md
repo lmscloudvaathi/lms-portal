@@ -101,6 +101,9 @@ source venv/bin/activate
 # Install requirements
 pip install -r requirements.txt
 
+# Required for certificate PDF downloads (Playwright Chromium)
+python -m playwright install chromium
+
 # Run database migrations (if alembic is set up)
 alembic upgrade head
 
@@ -108,6 +111,8 @@ alembic upgrade head
 uvicorn main:app --reload
 ```
 The backend API will run on `http://localhost:8000`. You can access the automatic interactive docs at `http://localhost:8000/docs`.
+
+Certificate downloads call `GET /api/v1/generate-pdf/{course_id}` and need Chromium available. Without `playwright install chromium`, downloads fail with a 500 on both local and production.
 
 ### 2. Setting up the Frontend
 Open a new terminal session, navigate to the `frontend` directory, install the node modules, and start the development server.

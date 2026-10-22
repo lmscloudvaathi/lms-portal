@@ -14,6 +14,8 @@ import {
   MessageSquare,
   AlertCircle,
   X,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import BrandLogo from "./components/BrandLogo";
 import SiteHeader from "./components/SiteHeader";
@@ -139,6 +141,7 @@ const Login = () => {
   const [showSignupOtpInput, setShowSignupOtpInput] = useState(false);
 
   const [formData, setFormData] = useState({ email: "", password: "", name: "" });
+  const [showPassword, setShowPassword] = useState(false);
 
   const activeBg = "bg-gradient-neon";
   const activeText = "text-gradient-neon";
@@ -356,13 +359,21 @@ const Login = () => {
               <div className="flex items-center rounded-xl border border-border bg-[var(--input)] px-4 py-3 transition-all focus-within:border-transparent focus-within:ring-2 focus-within:ring-primary/40">
                 <Lock className="mr-3 shrink-0 text-muted-foreground" size={20} strokeWidth={1.5} />
                 <input
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   name="password"
                   placeholder="Password"
                   required
                   className="flex-1 bg-transparent text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground"
                   onChange={handleInputChange}
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="ml-2 shrink-0 text-muted-foreground transition-colors hover:text-primary focus:outline-none"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                </button>
               </div>
             </div>
             <button
@@ -448,7 +459,7 @@ const Login = () => {
                 <div className="flex items-center rounded-xl border border-border bg-[var(--input)] px-4 py-3 transition-all focus-within:border-transparent focus-within:ring-2 focus-within:ring-primary/40">
                   <Lock className="mr-3 shrink-0 text-muted-foreground" size={20} strokeWidth={1.5} />
                   <input
-                    type="password"
+                    type={showPassword ? "text" : "password"}
                     name="password"
                     placeholder="Create Password (min. 6 characters)"
                     required
@@ -456,6 +467,14 @@ const Login = () => {
                     className="flex-1 bg-transparent text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground"
                     onChange={handleInputChange}
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="ml-2 shrink-0 text-muted-foreground transition-colors hover:text-primary focus:outline-none"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  </button>
                 </div>
                 <div className="flex items-center rounded-xl border border-border bg-[var(--input)] px-4 py-3 transition-all focus-within:border-transparent focus-within:ring-2 focus-within:ring-primary/40">
                   <Smartphone className="mr-3 shrink-0 text-muted-foreground" size={20} strokeWidth={1.5} />

@@ -8,7 +8,7 @@ import {
     LayoutDashboard, BookOpen, Compass, Award, LogOut,
     CheckCircle, AlertTriangle, X,
     Code, Play, Monitor, ChevronRight, Cloud, Flag,
-    Menu, Sparkles, User, PlayCircle, Trophy, Lock, BellRing, Trash2, Download, Clock, ExternalLink
+    Menu, Sparkles, User, PlayCircle, Lock, BellRing, Trash2, Download, Clock, ExternalLink
 } from "lucide-react";
 import { motion } from "framer-motion";
 
@@ -53,6 +53,10 @@ interface Course {
     is_trial_expired?: boolean;
     has_certificate?: boolean;
     certificate_id?: string | null;
+    lessons_completed?: number;
+    lessons_total?: number;
+    is_course_complete?: boolean;
+    certificate_eligible?: boolean;
 }
 
 interface CodeTest { id: number; title: string; time_limit: number; problems: any[]; completed?: boolean; }
@@ -301,7 +305,7 @@ const CourseCard = ({ course, type, navigate, handleFreeEnroll, openEnrollModal,
 const StudentDashboard = () => {
     const navigate = useNavigate();
     const RAZORPAY_PAYLINK_URL = getRazorpayPayLinkUrl();
-    const [activeTab, setActiveTab] = useState("home");
+    const [activeTab, setActiveTab] = useState("learning");
 
     const switchTab = (tab: string) => {
         forceUnlockBodyScroll();
@@ -311,8 +315,6 @@ const StudentDashboard = () => {
         setActiveTab(tab);
     };
 
-    // ✅ NEW: Sub-tab for My Learning (Standard vs Coding)
-    const [learningSubTab, setLearningSubTab] = useState("standard");
     const [exploreCategory, setExploreCategory] = useState<"all" | CourseCategoryId>("all");
 
     const [availableCourses, setAvailableCourses] = useState<Course[]>([]);
@@ -1146,9 +1148,11 @@ const StudentDashboard = () => {
         triggerToast("Downloading certificate...", "success");
         try {
             await downloadCertificatePdf(courseId, courseTitle);
+            triggerToast("Certificate downloaded!", "success");
+            await fetchData();
         } catch (error) {
             console.error("Download error:", error);
-            triggerToast("Failed to download certificate. Try again.", "error");
+            triggerToast(error instanceof Error ? error.message : "Failed to download certificate. Try again.", "error");
         }
     };
 
@@ -1319,9 +1323,7 @@ const StudentDashboard = () => {
 
                 {/* Center: Desktop Navigation Menu */}
                 <nav className="hidden lg:flex items-center gap-2">
-                    <NavItem icon={<LayoutDashboard size={18} />} label="Home" active={activeTab === "home"} onClick={() => switchTab("home")} />
                     <NavItem icon={<BookOpen size={18} />} label="My Learning" active={activeTab === "learning"} onClick={() => switchTab("learning")} />
-                    <NavItem icon={<Code size={18} />} label="Code Test" active={activeTab === "test"} onClick={() => switchTab("test")} />
                     <NavItem icon={<Compass size={18} />} label="Explore" active={activeTab === "explore"} onClick={() => switchTab("explore")} />
                     <NavItem icon={<Award size={18} />} label="Certificates" active={activeTab === "certificates"} onClick={() => switchTab("certificates")} />
                 </nav>
@@ -1394,9 +1396,7 @@ const StudentDashboard = () => {
                         </div>
 
                         <nav className="flex flex-1 flex-col gap-1.5 overflow-y-auto">
-                            <SideNavItem icon={<LayoutDashboard size={20} />} label="Home" active={activeTab === "home"} onClick={() => switchTab("home")} />
                             <SideNavItem icon={<BookOpen size={20} />} label="My Learning" active={activeTab === "learning"} onClick={() => switchTab("learning")} />
-                            <SideNavItem icon={<Code size={20} />} label="Code Test" active={activeTab === "test"} onClick={() => switchTab("test")} />
                             <SideNavItem icon={<Compass size={20} />} label="Explore" active={activeTab === "explore"} onClick={() => switchTab("explore")} />
                             <SideNavItem icon={<Award size={20} />} label="Certificates" active={activeTab === "certificates"} onClick={() => switchTab("certificates")} />
                             <SideNavItem icon={<BellRing size={20} />} label="Notifications" active={activeTab === "notifications"} onClick={() => switchTab("notifications")} />
@@ -1423,10 +1423,8 @@ const StudentDashboard = () => {
                 {/* Dynamic Title based on Tab */}
                 <div className="mb-8">
                     <h2 className="text-3xl font-extrabold text-slate-800">
-                        {activeTab === "home" && "Dashboard Overview"}
                         {activeTab === "learning" && "My Learning"}
                         {activeTab === "explore" && "Explore Courses"}
-                        {activeTab === "test" && "Coding Arena"}
                         {activeTab === "certificates" && "My Achievements"}
                         {activeTab === "notifications" && "Notifications"}
                         {activeTab === "settings" && "Account Settings"}
@@ -1457,24 +1455,24 @@ const StudentDashboard = () => {
                     </div>
                 )}
 
-                {/* HOME TAB */}
-                {activeTab === "home" && (
+                {/* LEARNING TAB (includes former Home overview) */}
+                {activeTab === "learning" && (
                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="flex flex-col gap-8">
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <StatCard icon={BookOpen} label="Courses Enrolled" value={enrolledCourses.length} />
                             <StatCard icon={Award} label="Certificates Earned" value={enrolledCourses.filter((course) => course.has_certificate).length} />
-                            <StatCard icon={Trophy} label="Challenges Attended" value={codeTests.filter(t => t.completed).length} />
                         </div>
+
                         <div>
                             <h3 className="text-xl font-bold text-slate-800 mb-4">Continue Learning</h3>
                             {enrolledCourses.length > 0 ? (
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                                    {enrolledCourses.slice(0, 2).map((course) => { // Show max 2 here
+                                    {enrolledCourses.slice(0, 2).map((course) => {
                                         const prog = progressMap[course.id] || { percent: 0, completed: 0, total: 0 };
                                         return (
                                             <div key={course.id} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-6 items-center">
                                                 <div className="w-full md:w-1/3 h-32 bg-slate-100 rounded-xl overflow-hidden relative">
-                                                    {course.image_url ? <img src={resolveMediaUrl(course.image_url)} className="w-full h-full object-cover" /> : <div className="flex items-center justify-center h-full text-slate-300"><BookOpen /></div>}
+                                                    {course.image_url ? <img src={resolveMediaUrl(course.image_url)} className="w-full h-full object-cover" alt="" /> : <div className="flex items-center justify-center h-full text-slate-300"><BookOpen /></div>}
                                                     {!course.is_trial_expired && <CourseProgressRing percent={prog.percent} />}
                                                 </div>
                                                 <div className="flex-1 w-full">
@@ -1494,65 +1492,37 @@ const StudentDashboard = () => {
                                     })}
                                 </div>
                             ) : (
-                                <div className="bg-white p-10 rounded-2xl border border-dashed border-slate-300 text-center text-slate-400">You haven't enrolled in any courses yet.</div>
+                                <div className="bg-white p-10 rounded-2xl border border-dashed border-slate-300 text-center text-slate-400">You haven&apos;t enrolled in any courses yet.</div>
                             )}
                         </div>
+
+                        <div>
+                            <h3 className="text-xl font-bold text-slate-800 mb-4">All Courses</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {enrolledCourses
+                                    .filter((c) => c.course_type !== "coding")
+                                    .map(c => (
+                                        <CourseCard
+                                            key={c.id}
+                                            course={c}
+                                            type="enrolled"
+                                            navigate={navigate}
+                                            progress={progressMap[c.id]}
+                                            handleDownloadSyllabus={handleDownloadSyllabus}
+                                            onPayClick={(course: Course) => {
+                                                setSelectedCourse(course);
+                                                setAppliedCoupon(null);
+                                                setShowModal(true);
+                                            }}
+                                        />
+                                    ))
+                                }
+                                {enrolledCourses.filter((c) => c.course_type !== "coding").length === 0 && (
+                                    <div className="col-span-full text-center py-20 text-slate-400">No active courses.</div>
+                                )}
+                            </div>
+                        </div>
                     </motion.div>
-                )}
-
-                {/* LEARNING TAB */}
-                {activeTab === "learning" && (
-                    <div>
-                        {/* ✅ NEW: Sub-navigation to separate Standard vs Coding courses */}
-                        <div className="flex gap-4 mb-6 border-b border-slate-200 pb-2">
-                            <button
-                                onClick={() => setLearningSubTab("standard")}
-                                className={`pb-2 text-sm font-bold transition-all ${learningSubTab === "standard"
-                                    ? "text-[#005EB8] border-b-2 border-[#005EB8]"
-                                    : "text-slate-500 hover:text-slate-800"
-                                    }`}
-                            >
-                                Standard Courses
-                            </button>
-                            <button
-                                onClick={() => setLearningSubTab("coding")}
-                                className={`pb-2 text-sm font-bold transition-all ${learningSubTab === "coding"
-                                    ? "text-[#005EB8] border-b-2 border-[#005EB8]"
-                                    : "text-slate-500 hover:text-slate-800"
-                                    }`}
-                            >
-                                Coding Courses
-                            </button>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            {/* ✅ Logic: Filter courses based on the selected sub-tab */}
-                            {enrolledCourses
-                                .filter(c => {
-                                    if (learningSubTab === "standard") return c.course_type !== "coding";
-                                    if (learningSubTab === "coding") return c.course_type === "coding";
-                                    return true;
-                                })
-                                .map(c => (
-                                    <CourseCard
-                                        key={c.id}
-                                        course={c}
-                                        type="enrolled"
-                                        navigate={navigate}
-                                        progress={progressMap[c.id]}
-                                        handleDownloadSyllabus={handleDownloadSyllabus}
-                                        onPayClick={(course: Course) => {
-                                            // Reuse modal logic for payment
-                                            setSelectedCourse(course);
-                                            setAppliedCoupon(null);
-                                            setShowModal(true);
-                                        }}
-                                    />
-                                ))
-                            }
-                            {enrolledCourses.length === 0 && <div className="col-span-full text-center py-20 text-slate-400">No active courses.</div>}
-                        </div>
-                    </div>
                 )}
 
                 {/* EXPLORE TAB */}
@@ -1611,39 +1581,38 @@ const StudentDashboard = () => {
                     </div>
                 )}
 
-                {/* TEST TAB */}
-                {activeTab === "test" && (
-                    <div className="grid gap-5">
-                        {codeTests.map(test => (
-                            <div key={test.id} className="bg-white p-6 rounded-xl border border-slate-200 flex justify-between items-center shadow-sm hover:shadow-md transition-all">
-                                <div><h3 className="text-lg font-bold text-slate-800">{test.title}</h3><p className="text-slate-500 text-sm">Duration: {test.time_limit} Mins</p></div>
-                                <button onClick={() => setShowPassKeyModal(test.id)} className="bg-[#005EB8] text-white px-6 py-2 rounded-lg font-bold hover:bg-blue-700 transition-colors">Start Test</button>
-                            </div>
-                        ))}
-                    </div>
-                )}
-
                 {/* CERTIFICATES TAB */}
                 {activeTab === "certificates" && (
                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-6">
+                        <p className="text-sm text-slate-500">
+                            Finish every lesson in a course to unlock its certificate. Download works for every enrolled course once complete.
+                        </p>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            {enrolledCourses.map(course => (
-                                <div key={course.id} className="bg-white p-6 rounded-xl border border-slate-200 hover:shadow-md transition-all flex items-center justify-between">
-                                    <div className="flex items-center gap-4">
-                                        <div className={`h-12 w-12 rounded-lg flex items-center justify-center ${course.has_certificate ? "bg-green-100 text-green-600" : "bg-red-100 text-red-500"}`}>
-                                            {course.has_certificate ? <Award size={24} /> : <Lock size={24} />}
+                            {enrolledCourses.filter((c) => c.course_type !== "coding").map(course => {
+                                const canDownload = Boolean(course.has_certificate || course.certificate_eligible || course.is_course_complete);
+                                const done = Number(course.lessons_completed || 0);
+                                const total = Number(course.lessons_total || 0);
+                                return (
+                                <div key={course.id} className="bg-white p-6 rounded-xl border border-slate-200 hover:shadow-md transition-all flex items-center justify-between gap-3">
+                                    <div className="flex min-w-0 items-center gap-4">
+                                        <div className={`h-12 w-12 shrink-0 rounded-lg flex items-center justify-center ${canDownload ? "bg-green-100 text-green-600" : "bg-slate-100 text-slate-400"}`}>
+                                            {canDownload ? <Award size={24} /> : <Lock size={24} />}
                                         </div>
-                                        <div>
-                                            <h4 className="font-bold text-slate-800">{course.title}</h4>
+                                        <div className="min-w-0">
+                                            <h4 className="font-bold text-slate-800 truncate">{course.title}</h4>
                                             {course.has_certificate ? (
-                                                <span className="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded mt-1 inline-block">COMPLETED</span>
+                                                <span className="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded mt-1 inline-block">CERTIFICATE READY</span>
+                                            ) : canDownload ? (
+                                                <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded mt-1 inline-block">READY TO ISSUE</span>
                                             ) : (
-                                                <span className="text-[10px] font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded mt-1 inline-block">INCOMPLETE</span>
+                                                <span className="text-[10px] font-bold text-slate-500 bg-slate-50 px-2 py-0.5 rounded mt-1 inline-block">
+                                                    {total > 0 ? `${done}/${total} lessons` : "IN PROGRESS"}
+                                                </span>
                                             )}
                                         </div>
                                     </div>
 
-                                    <div className="flex items-center gap-1">
+                                    <div className="flex shrink-0 items-center gap-1">
                                     {course.certificate_id && (
                                         <button
                                             onClick={() => navigate(certificateVerifyPath(course.certificate_id!))}
@@ -1654,16 +1623,19 @@ const StudentDashboard = () => {
                                         </button>
                                     )}
                                     <button
-                                        onClick={() => course.has_certificate ? handleDownloadCertificate(course.id, course.title) : triggerToast("Complete the course first!", "error")}
-                                        disabled={!course.has_certificate}
-                                        className={`p-2 rounded-lg transition-colors ${course.has_certificate ? "text-[#005EB8] hover:bg-blue-50 cursor-pointer" : "text-slate-300 cursor-not-allowed"}`}
-                                        title={course.has_certificate ? "Download Certificate" : "Locked: Complete Course First"}
+                                        onClick={() => canDownload
+                                            ? void handleDownloadCertificate(course.id, course.title)
+                                            : triggerToast(total > 0 ? `Complete all lessons first (${done}/${total}).` : "Complete the course first!", "error")}
+                                        disabled={!canDownload}
+                                        className={`p-2 rounded-lg transition-colors ${canDownload ? "text-[#005EB8] hover:bg-blue-50 cursor-pointer" : "text-slate-300 cursor-not-allowed"}`}
+                                        title={canDownload ? "Download Certificate" : "Locked: Complete Course First"}
                                     >
                                         <Download size={20} />
                                     </button>
                                     </div>
                                 </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     </motion.div>
                 )}

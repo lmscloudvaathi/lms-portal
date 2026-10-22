@@ -10,13 +10,13 @@ import DashboardLayout from "./DashboardLayout";
 import CreateCourse from "./CreateCourse";
 import CourseBuilder from "./CourseBuilder";
 import AssignmentManager from "./AssignmentManager";
+import QuizResponses from "./QuizResponses";
 import StudentDashboard from "./StudentDashboard"; 
 import CoursePlayer from "./CoursePlayer"; 
 import CourseProgressDashboard from "./CourseProgressDashboard"; 
 import VerifyCertificate from "./VerifyCertificate";
 import AddAdmits from "./AddAdmits"; 
 import CoursePreview from "./CoursePreview";
-import CodeArena from "./CodeArena"; 
 import Dashboard from "./Dashboard"; 
 import InstructorSettings from "./InstructorSettings"; 
 import StudentManagement from "./StudentManagement";
@@ -375,10 +375,11 @@ function App() {
           <Route path="create-course" element={<CreateCourse />} />
           <Route path="course/:courseId/builder" element={<CourseBuilder />} />
           <Route path="assignments" element={<AssignmentManager />} />
+          <Route path="quiz-responses" element={<QuizResponses />} />
           <Route path="add-admits" element={<AddAdmits />} />
           <Route path="course/:courseId/preview" element={<CodingCourseManager />} />
           <Route path="course/:courseId/CoursePreview" element={<CoursePreview />} />
-          <Route path="code-arena" element={<CodeArena />} />
+          <Route path="code-arena" element={<Navigate to="/dashboard" replace />} />
           <Route path="students" element={<StudentManagement />} />
           <Route path="settings" element={<InstructorSettings />} />
           <Route path="messages" element={<Messages />} />

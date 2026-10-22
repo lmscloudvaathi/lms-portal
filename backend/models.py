@@ -64,11 +64,69 @@ class ContentItem(Base):
     test_config = Column(Text, nullable=True) 
     # Optional JSON string list of resource URLs for video lessons.
     resource_links = Column(Text, nullable=True)
+    # Native quiz: minimum percent required to mark lesson complete (default 70)
+    pass_percent = Column(Integer, nullable=True, default=70)
 
     start_time = Column(DateTime, nullable=True)
     end_time = Column(DateTime, nullable=True)
 
     module = relationship("Module", back_populates="items")
+    quiz_questions = relationship("QuizQuestion", back_populates="content_item", cascade="all, delete-orphan")
+    quiz_attempts = relationship("QuizAttempt", back_populates="content_item", cascade="all, delete-orphan")
+
+
+class QuizQuestion(Base):
+    __tablename__ = "quiz_questions"
+    id = Column(Integer, primary_key=True, index=True)
+    content_item_id = Column(Integer, ForeignKey("content_items.id"), nullable=False, index=True)
+    prompt = Column(Text, nullable=False)
+    # single | true_false | multi
+    question_type = Column(String(32), nullable=False, default="single")
+    order = Column(Integer, default=0)
+    points = Column(Integer, default=1)
+
+    content_item = relationship("ContentItem", back_populates="quiz_questions")
+    options = relationship("QuizOption", back_populates="question", cascade="all, delete-orphan")
+
+
+class QuizOption(Base):
+    __tablename__ = "quiz_options"
+    id = Column(Integer, primary_key=True, index=True)
+    question_id = Column(Integer, ForeignKey("quiz_questions.id"), nullable=False, index=True)
+    label = Column(String(1000), nullable=False)
+    is_correct = Column(Boolean, default=False)
+    order = Column(Integer, default=0)
+
+    question = relationship("QuizQuestion", back_populates="options")
+
+
+class QuizAttempt(Base):
+    __tablename__ = "quiz_attempts"
+    id = Column(Integer, primary_key=True, index=True)
+    content_item_id = Column(Integer, ForeignKey("content_items.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    score = Column(Integer, default=0)
+    max_score = Column(Integer, default=0)
+    percent = Column(Integer, default=0)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    submitted_at = Column(DateTime, default=datetime.utcnow)
+
+    content_item = relationship("ContentItem", back_populates="quiz_attempts")
+    student = relationship("User")
+    answers = relationship("QuizAnswer", back_populates="attempt", cascade="all, delete-orphan")
+
+
+class QuizAnswer(Base):
+    __tablename__ = "quiz_answers"
+    id = Column(Integer, primary_key=True, index=True)
+    attempt_id = Column(Integer, ForeignKey("quiz_attempts.id"), nullable=False, index=True)
+    question_id = Column(Integer, ForeignKey("quiz_questions.id"), nullable=False, index=True)
+    selected_option_ids = Column(Text, nullable=True)  # JSON list of option ids
+    is_correct = Column(Boolean, default=False)
+    points_awarded = Column(Integer, default=0)
+
+    attempt = relationship("QuizAttempt", back_populates="answers")
+    question = relationship("QuizQuestion")
 
 class Enrollment(Base):
     __tablename__ = "enrollments"

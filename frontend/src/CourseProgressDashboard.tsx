@@ -84,7 +84,6 @@ const TYPE_META: Record<string, { label: string; icon: typeof PlayCircle }> = {
   notes: { label: "Notes", icon: FileText },
   quizzes: { label: "Quizzes", icon: HelpCircle },
   assignments: { label: "Assignments", icon: UploadCloud },
-  code_tests: { label: "Code tests", icon: Code },
   live_tests: { label: "Live tests", icon: Radio },
   lessons: { label: "Lessons", icon: BookOpen },
 };
@@ -199,8 +198,8 @@ export default function CourseProgressDashboard() {
     try {
       await downloadCertificatePdf(Number(courseId), data.course.title);
       triggerToast("Certificate downloaded.", "success");
-    } catch {
-      triggerToast("Could not download certificate.", "error");
+    } catch (err) {
+      triggerToast(err instanceof Error ? err.message : "Could not download certificate.", "error");
     }
   };
 

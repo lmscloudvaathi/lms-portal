@@ -12,10 +12,18 @@ import {
     Trash2, Code, Edit, Sparkles
 } from "lucide-react";
 
+interface ModuleItem {
+    id: number;
+    title: string;
+    type: string;
+    order?: number | null;
+}
+
 interface Module {
     id: number;
     title: string;
     order: number;
+    items?: ModuleItem[];
 }
 
 // ✅ NEW: Structure for Multiple Problems
@@ -30,6 +38,43 @@ interface ResourceLink {
     title: string;
     link: string;
 }
+
+type QuizQuestionType = "single" | "true_false" | "multi";
+
+interface QuizOptionDraft {
+    label: string;
+    is_correct: boolean;
+}
+
+interface QuizQuestionDraft {
+    prompt: string;
+    question_type: QuizQuestionType;
+    points: number;
+    options: QuizOptionDraft[];
+}
+
+const emptyQuizQuestion = (type: QuizQuestionType = "single"): QuizQuestionDraft => {
+    if (type === "true_false") {
+        return {
+            prompt: "",
+            question_type: "true_false",
+            points: 1,
+            options: [
+                { label: "True", is_correct: true },
+                { label: "False", is_correct: false },
+            ],
+        };
+    }
+    return {
+        prompt: "",
+        question_type: type,
+        points: 1,
+        options: [
+            { label: "", is_correct: true },
+            { label: "", is_correct: false },
+        ],
+    };
+};
 
 interface LibraryItem {
     id: number;
@@ -79,6 +124,8 @@ const CourseBuilder = () => {
     const [isMandatory, setIsMandatory] = useState(false);
     const [startTime, setStartTime] = useState("");
     const [endTime, setEndTime] = useState("");
+    const [passPercent, setPassPercent] = useState("70");
+    const [quizQuestions, setQuizQuestions] = useState<QuizQuestionDraft[]>([emptyQuizQuestion("single")]);
     // ✅ FIX: State for Array of Problems (Up to 3)
     const [problems, setProblems] = useState<CodeProblem[]>([
         { title: "", description: "", difficulty: "Easy", testCases: [{ input: "", output: "" }] }
@@ -237,7 +284,6 @@ const CourseBuilder = () => {
         { value: "video", label: "Video" },
         { value: "note", label: "Note" },
         { value: "quiz", label: "Quiz" },
-        { value: "code_test", label: "Code Test" },
         { value: "assignment", label: "Assignment" },
         { value: "live_class", label: "Live Class" },
         { value: "live_test", label: "Live Test" },
@@ -511,6 +557,7 @@ const CourseBuilder = () => {
 
                 triggerToast("🔴 Live Class Started & Added to Curriculum!", "success");
                 setActiveModal(null); resetForm();
+                await fetchModules();
                 return;
             } catch (err) {
                 triggerToast("Failed to start Live Class", "error");
@@ -522,7 +569,7 @@ const CourseBuilder = () => {
         const payload: any = {
             title: itemTitle,
             type: typeKey, // "live_test"
-            data_url: itemUrl,
+            data_url: activeModal === "Quiz" ? null : itemUrl,
             duration: duration ? parseInt(duration) : null,
             is_mandatory: isMandatory,
             instructions: itemInstructions,
@@ -549,23 +596,154 @@ const CourseBuilder = () => {
             payload.test_config = JSON.stringify(config);
         }
 
+        if (activeModal === "Quiz") {
+            const passPct = Math.max(0, Math.min(100, parseInt(passPercent || "70", 10) || 70));
+            payload.pass_percent = passPct;
+            if (!quizQuestions.length) return triggerToast("Add at least one quiz question.", "error");
+            for (let i = 0; i < quizQuestions.length; i++) {
+                const q = quizQuestions[i];
+                if (!q.prompt.trim()) return triggerToast(`Question ${i + 1} needs a prompt.`, "error");
+                if (q.options.length < 2) return triggerToast(`Question ${i + 1} needs at least 2 options.`, "error");
+                if (q.options.some((o) => !o.label.trim())) return triggerToast(`Question ${i + 1} has an empty option.`, "error");
+                const correctCount = q.options.filter((o) => o.is_correct).length;
+                if (q.question_type === "multi") {
+                    if (correctCount < 1) return triggerToast(`Question ${i + 1}: mark at least one correct answer.`, "error");
+                } else if (correctCount !== 1) {
+                    return triggerToast(`Question ${i + 1}: mark exactly one correct answer.`, "error");
+                }
+            }
+        }
+
         try {
-            await axios.post(`${API_BASE_URL}/content`, payload, { headers: { Authorization: `Bearer ${token}` } });
-            triggerToast(`✅ ${activeModal} added successfully!`, "success");
+            const createRes = await axios.post(`${API_BASE_URL}/content`, payload, { headers: { Authorization: `Bearer ${token}` } });
+            if (activeModal === "Quiz") {
+                const newId = createRes.data?.id;
+                if (!newId) {
+                    triggerToast("Quiz item created but id missing; questions not saved.", "error");
+                    setActiveModal(null); resetForm();
+                    await fetchModules();
+                    return;
+                }
+                await axios.put(
+                    `${API_BASE_URL}/content/${newId}/quiz`,
+                    {
+                        pass_percent: Math.max(0, Math.min(100, parseInt(passPercent || "70", 10) || 70)),
+                        duration: duration ? parseInt(duration, 10) : null,
+                        questions: quizQuestions.map((q, qi) => ({
+                            prompt: q.prompt.trim(),
+                            question_type: q.question_type,
+                            points: q.points || 1,
+                            order: qi,
+                            options: q.options.map((o, oi) => ({
+                                label: o.label.trim(),
+                                is_correct: o.is_correct,
+                                order: oi,
+                            })),
+                        })),
+                    },
+                    { headers: { Authorization: `Bearer ${token}` } }
+                );
+                triggerToast(`Quiz saved with ${quizQuestions.length} question(s). Students can take it now.`, "success");
+            } else {
+                triggerToast(`✅ ${activeModal} added successfully!`, "success");
+            }
             setActiveModal(null); resetForm();
-        } catch (err) { triggerToast("Failed to save.", "error"); }
+            await fetchModules();
+        } catch (err: any) {
+            triggerToast(err?.response?.data?.detail || "Failed to save.", "error");
+        }
     };
 
     const resetForm = () => {
         setItemTitle(""); setItemUrl(""); setItemInstructions("");
         setDuration(""); setIsMandatory(false);
         setResourceLinks([{ title: "", link: "" }]);
+        setPassPercent("70");
+        setQuizQuestions([emptyQuizQuestion("single")]);
 
         // ✅ ADD THESE:
         setStartTime(""); setEndTime("");
 
         setProblems([{ title: "", description: "", difficulty: "Easy", testCases: [{ input: "", output: "" }] }]);
         setActiveProblemIndex(0);
+    };
+
+    const updateQuizQuestion = (index: number, patch: Partial<QuizQuestionDraft>) => {
+        setQuizQuestions((prev) => prev.map((q, i) => (i === index ? { ...q, ...patch } : q)));
+    };
+
+    const setQuizQuestionType = (index: number, type: QuizQuestionType) => {
+        setQuizQuestions((prev) =>
+            prev.map((q, i) => {
+                if (i !== index) return q;
+                if (type === "true_false") {
+                    return {
+                        ...q,
+                        question_type: "true_false",
+                        options: [
+                            { label: "True", is_correct: q.options.find((o) => o.label === "True")?.is_correct ?? true },
+                            { label: "False", is_correct: q.options.find((o) => o.label === "False")?.is_correct ?? false },
+                        ],
+                    };
+                }
+                const opts =
+                    q.question_type === "true_false"
+                        ? [
+                              { label: "", is_correct: true },
+                              { label: "", is_correct: false },
+                          ]
+                        : q.options;
+                return { ...q, question_type: type, options: opts };
+            })
+        );
+    };
+
+    const updateQuizOption = (qIndex: number, oIndex: number, patch: Partial<QuizOptionDraft>) => {
+        setQuizQuestions((prev) =>
+            prev.map((q, i) => {
+                if (i !== qIndex) return q;
+                const options = q.options.map((o, oi) => (oi === oIndex ? { ...o, ...patch } : o));
+                return { ...q, options };
+            })
+        );
+    };
+
+    const markQuizCorrect = (qIndex: number, oIndex: number) => {
+        setQuizQuestions((prev) =>
+            prev.map((q, i) => {
+                if (i !== qIndex) return q;
+                if (q.question_type === "multi") {
+                    return {
+                        ...q,
+                        options: q.options.map((o, oi) =>
+                            oi === oIndex ? { ...o, is_correct: !o.is_correct } : o
+                        ),
+                    };
+                }
+                return {
+                    ...q,
+                    options: q.options.map((o, oi) => ({ ...o, is_correct: oi === oIndex })),
+                };
+            })
+        );
+    };
+
+    const addQuizOption = (qIndex: number) => {
+        setQuizQuestions((prev) =>
+            prev.map((q, i) =>
+                i === qIndex ? { ...q, options: [...q.options, { label: "", is_correct: false }] } : q
+            )
+        );
+    };
+
+    const removeQuizOption = (qIndex: number, oIndex: number) => {
+        setQuizQuestions((prev) =>
+            prev.map((q, i) => {
+                if (i !== qIndex) return q;
+                if (q.options.length <= 2) return q;
+                return { ...q, options: q.options.filter((_, oi) => oi !== oIndex) };
+            })
+        );
     };
 
     // Inside CourseBuilder.tsx, find the CodingCourseBuilder component and replace it with this:
@@ -953,6 +1131,14 @@ const CourseBuilder = () => {
                         <h2 className="text-lg md:text-xl font-extrabold text-[#0f172a] m-0 line-clamp-1">
                             {courseDetails?.title || "Course Builder"}
                         </h2>
+                        {courseDetails?.is_published != null && (
+                            <span
+                                className="rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-white"
+                                style={{ background: courseDetails.is_published ? "#87C232" : "#64748b" }}
+                            >
+                                {courseDetails.is_published ? "Published" : "Draft"}
+                            </span>
+                        )}
                         <button
                             onClick={handleEditCourseClick}
                             className="bg-none border-none cursor-pointer p-1 flex items-center hover:bg-slate-100 rounded-full transition-colors"
@@ -997,28 +1183,64 @@ const CourseBuilder = () => {
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                         {modules.map((m) => (
-                            <div key={m.id} onClick={() => setSelectedModuleId(m.id)} style={{ display: "flex", alignItems: "center", gap: "12px", padding: "14px", background: selectedModuleId === m.id ? "#E2E8F0" : "white", borderRadius: "12px", border: selectedModuleId === m.id ? `1.5px solid ${brand.blue}` : `1px solid ${brand.border}`, cursor: "pointer", transition: "all 0.2s ease" }}>
-                                <Layout size={18} color={selectedModuleId === m.id ? brand.blue : brand.textLight} />
-                                <span style={{ fontSize: "14px", fontWeight: "600", color: brand.textMain, flex: 1 }}>{m.title}</span>
-                                <button
-                                    type="button"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleDeleteModule(m.id);
-                                    }}
-                                    style={{
-                                        border: "none",
-                                        background: "transparent",
-                                        color: "#ef4444",
-                                        cursor: "pointer",
-                                        display: "flex",
-                                        alignItems: "center",
-                                        padding: "4px"
-                                    }}
-                                    title="Delete module"
-                                >
-                                    <Trash2 size={16} />
-                                </button>
+                            <div key={m.id}>
+                                <div onClick={() => setSelectedModuleId(m.id)} style={{ display: "flex", alignItems: "center", gap: "12px", padding: "14px", background: selectedModuleId === m.id ? "#E2E8F0" : "white", borderRadius: "12px", border: selectedModuleId === m.id ? `1.5px solid ${brand.blue}` : `1px solid ${brand.border}`, cursor: "pointer", transition: "all 0.2s ease" }}>
+                                    <Layout size={18} color={selectedModuleId === m.id ? brand.blue : brand.textLight} />
+                                    <span style={{ fontSize: "14px", fontWeight: "600", color: brand.textMain, flex: 1 }}>{m.title}</span>
+                                    <span style={{ fontSize: "11px", fontWeight: 700, color: brand.textLight }}>
+                                        {(m.items || []).length}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleDeleteModule(m.id);
+                                        }}
+                                        style={{
+                                            border: "none",
+                                            background: "transparent",
+                                            color: "#ef4444",
+                                            cursor: "pointer",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            padding: "4px"
+                                        }}
+                                        title="Delete module"
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
+                                </div>
+                                {selectedModuleId === m.id && (m.items || []).length > 0 && (
+                                    <div style={{ marginTop: "8px", marginLeft: "12px", display: "flex", flexDirection: "column", gap: "6px" }}>
+                                        {(m.items || []).map((item) => (
+                                            <div
+                                                key={item.id}
+                                                style={{
+                                                    display: "flex",
+                                                    alignItems: "center",
+                                                    gap: "8px",
+                                                    padding: "8px 12px",
+                                                    borderRadius: "10px",
+                                                    background: "#f8fafc",
+                                                    border: `1px solid ${brand.border}`,
+                                                    fontSize: "12px",
+                                                    fontWeight: 600,
+                                                    color: brand.textMain,
+                                                }}
+                                            >
+                                                {item.type === "quiz" ? (
+                                                    <HelpCircle size={14} color={brand.blue} />
+                                                ) : item.type === "video" ? (
+                                                    <Video size={14} color={brand.blue} />
+                                                ) : (
+                                                    <FileText size={14} color={brand.textLight} />
+                                                )}
+                                                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</span>
+                                                <span style={{ fontSize: "10px", fontWeight: 800, color: brand.textLight, textTransform: "uppercase" }}>{item.type}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         ))}
                         {showAddModule ? (
@@ -1062,8 +1284,7 @@ const CourseBuilder = () => {
                             { type: "Add from Library", icon: <BookOpen size={28} color={brand.blue} />, desc: "Reuse existing items" },
                             { type: "Note", icon: <Edit3 size={28} color={brand.blue} />, desc: "Drive PDF Links" },
                             { type: "Video", icon: <Video size={28} color={brand.blue} />, desc: "YouTube lessons" },
-                            { type: "Quiz", icon: <HelpCircle size={28} color={brand.blue} />, desc: "Google Form Links" },
-                            { type: "Code Test", icon: <Code size={28} color="#7c3aed" />, desc: "Compiler Challenges" },
+                            { type: "Quiz", icon: <HelpCircle size={28} color={brand.blue} />, desc: "In-app MCQ quiz" },
                             { type: "Assignment", icon: <FileText size={28} color={brand.blue} />, desc: "PDF projects (Drive)" },
                             { type: "Live Class", icon: <Radio size={28} color="#ef4444" />, desc: "YouTube Live Link" },
                             { type: "Live Test", icon: <Zap size={28} color="#EAB308" />, desc: "Timed assessment" },
@@ -1498,7 +1719,7 @@ const CourseBuilder = () => {
             </Modal>
 
             <Modal open={!!activeModal} onClose={() => setActiveModal(null)} overlayStyle={{ background: "rgba(15, 23, 42, 0.7)" }}>
-                    <div style={modalContent} onClick={(e) => e.stopPropagation()}>
+                    <div style={{ ...modalContent, maxWidth: activeModal === "Quiz" ? "720px" : modalContent.maxWidth }} onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "32px" }}>
                             <h3 style={{ fontSize: "22px", fontWeight: "800", margin: 0 }}>Add {activeModal}</h3>
                             <X onClick={() => setActiveModal(null)} style={{ cursor: "pointer", color: brand.textLight }} />
@@ -1540,6 +1761,107 @@ const CourseBuilder = () => {
                                         <button onClick={addTestCase} style={{ fontSize: "13px", color: brand.blue, background: "none", border: "none", cursor: "pointer", fontWeight: "700", display: "flex", alignItems: "center", gap: "5px", marginTop: "5px" }}>+ Add Test Case</button>
                                     </div>
                                 </div>
+                            </div>
+                        ) : activeModal === "Quiz" ? (
+                            <div style={{ display: "flex", flexDirection: "column", gap: "20px", maxHeight: "65vh", overflowY: "auto", paddingRight: "8px" }}>
+                                <div><label style={labelStyle}>Quiz Title</label><input value={itemTitle} onChange={(e) => setItemTitle(e.target.value)} placeholder="e.g. Module 1 Check" style={inputStyle} /></div>
+                                <div style={{ display: "flex", gap: "12px" }}>
+                                    <div style={{ flex: 1 }}>
+                                        <label style={labelStyle}>Time limit (minutes, optional)</label>
+                                        <input type="number" min={1} value={duration} onChange={(e) => setDuration(e.target.value)} placeholder="e.g. 20" style={inputStyle} />
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                        <label style={labelStyle}>Pass percent</label>
+                                        <input type="number" min={0} max={100} value={passPercent} onChange={(e) => setPassPercent(e.target.value)} placeholder="70" style={inputStyle} />
+                                    </div>
+                                </div>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                    <label style={{ ...labelStyle, marginBottom: 0 }}>Questions</label>
+                                    <button
+                                        type="button"
+                                        onClick={() => setQuizQuestions((prev) => [...prev, emptyQuizQuestion("single")])}
+                                        style={{ border: "none", background: "none", color: brand.blue, fontWeight: 700, cursor: "pointer", fontSize: "13px" }}
+                                    >
+                                        + Add question
+                                    </button>
+                                </div>
+                                {quizQuestions.map((q, qi) => (
+                                    <div key={qi} style={{ border: `1px solid ${brand.border}`, borderRadius: "12px", padding: "14px", background: "#f8fafc" }}>
+                                        <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", marginBottom: "10px" }}>
+                                            <span style={{ fontSize: "12px", fontWeight: 800, color: brand.textLight }}>QUESTION {qi + 1}</span>
+                                            {quizQuestions.length > 1 && (
+                                                <button type="button" onClick={() => setQuizQuestions((prev) => prev.filter((_, i) => i !== qi))} style={{ border: "none", background: "none", color: "#ef4444", cursor: "pointer", fontWeight: 700, fontSize: "12px" }}>
+                                                    Remove
+                                                </button>
+                                            )}
+                                        </div>
+                                        <div style={{ marginBottom: "10px" }}>
+                                            <label style={labelStyle}>Type</label>
+                                            <select
+                                                value={q.question_type}
+                                                onChange={(e) => setQuizQuestionType(qi, e.target.value as QuizQuestionType)}
+                                                style={inputStyle}
+                                            >
+                                                <option value="single">Multiple choice (single answer)</option>
+                                                <option value="true_false">True / False</option>
+                                                <option value="multi">Multi-select</option>
+                                            </select>
+                                        </div>
+                                        <div style={{ marginBottom: "10px" }}>
+                                            <label style={labelStyle}>Prompt</label>
+                                            <textarea
+                                                rows={2}
+                                                value={q.prompt}
+                                                onChange={(e) => updateQuizQuestion(qi, { prompt: e.target.value })}
+                                                placeholder="Enter the question..."
+                                                style={{ ...inputStyle, resize: "vertical" }}
+                                            />
+                                        </div>
+                                        <div style={{ marginBottom: "8px" }}>
+                                            <label style={labelStyle}>
+                                                Options {q.question_type === "multi" ? "(toggle all correct answers)" : "(select the correct answer)"}
+                                            </label>
+                                            {q.options.map((opt, oi) => (
+                                                <div key={oi} style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "8px" }}>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => markQuizCorrect(qi, oi)}
+                                                        title={opt.is_correct ? "Correct" : "Mark correct"}
+                                                        style={{
+                                                            width: "28px",
+                                                            height: "28px",
+                                                            borderRadius: q.question_type === "multi" ? "6px" : "50%",
+                                                            border: `2px solid ${opt.is_correct ? brand.green : brand.border}`,
+                                                            background: opt.is_correct ? brand.green : "white",
+                                                            color: "white",
+                                                            fontWeight: 800,
+                                                            fontSize: "12px",
+                                                            cursor: "pointer",
+                                                            flexShrink: 0,
+                                                        }}
+                                                    >
+                                                        {opt.is_correct ? "✓" : ""}
+                                                    </button>
+                                                    <input
+                                                        value={opt.label}
+                                                        disabled={q.question_type === "true_false"}
+                                                        onChange={(e) => updateQuizOption(qi, oi, { label: e.target.value })}
+                                                        placeholder={`Option ${oi + 1}`}
+                                                        style={{ ...inputStyle, flex: 1, marginBottom: 0, opacity: q.question_type === "true_false" ? 0.85 : 1 }}
+                                                    />
+                                                    {q.question_type !== "true_false" && q.options.length > 2 && (
+                                                        <Trash2 size={16} color="#ef4444" style={{ cursor: "pointer" }} onClick={() => removeQuizOption(qi, oi)} />
+                                                    )}
+                                                </div>
+                                            ))}
+                                            {q.question_type !== "true_false" && (
+                                                <button type="button" onClick={() => addQuizOption(qi)} style={{ border: "none", background: "none", color: brand.blue, fontWeight: 700, cursor: "pointer", fontSize: "12px" }}>
+                                                    + Add option
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         ) : (
                             <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>

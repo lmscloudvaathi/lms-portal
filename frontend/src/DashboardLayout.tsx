@@ -2,7 +2,7 @@ import { Component, useCallback, useEffect, useState, type ReactNode } from "rea
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, BookOpen, UserPlus, PlusCircle, LogOut, Bell,
-  ChevronRight, Code, Menu, Users, FolderOpen, MessageSquare, X
+  ChevronRight, Menu, Users, FolderOpen, MessageSquare, X, ClipboardList
 } from "lucide-react";
 import BrandLogo from "./components/BrandLogo";
 import ProfileMenu from "./components/ProfileMenu";
@@ -81,10 +81,10 @@ const DashboardLayout = () => {
     { label: "Home", path: "/dashboard", icon: <LayoutDashboard size={20} />, end: true },
     { label: "My Courses", path: "/dashboard/courses", icon: <BookOpen size={20} /> },
     { label: "Create Course", path: "/dashboard/create-course", icon: <PlusCircle size={20} /> },
-    { label: "Code Arena", path: "/dashboard/code-arena", icon: <Code size={20} /> },
     { label: "Add Admits", path: "/dashboard/add-admits", icon: <UserPlus size={20} /> },
     { label: "Students", path: "/dashboard/students", icon: <Users size={20} /> },
     { label: "Verification", path: "/dashboard/assignments", icon: <FolderOpen size={20} /> },
+    { label: "Quiz Responses", path: "/dashboard/quiz-responses", icon: <ClipboardList size={20} /> },
     { label: "Messages", path: "/dashboard/messages", icon: <MessageSquare size={20} /> },
   ];
 

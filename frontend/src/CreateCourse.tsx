@@ -33,8 +33,8 @@ const CreateCourse = () => {
       description: finalDescription,
       price: isFree ? 0 : parseInt(formData.price),
       image_url: formData.image_url,
-      course_type: formData.course_type,
-      language: formData.course_type === "coding" ? formData.language : null,
+      course_type: "standard",
+      language: null,
       category: formData.category,
     };
 
@@ -51,13 +51,6 @@ const CreateCourse = () => {
       if (!toast.show) setLoading(false);
     }
   };
-
-  const typeBtn = (active: boolean) =>
-    `rounded-xl border px-4 py-3 text-left transition-all ${
-      active
-        ? "border-primary bg-input shadow-[0_0_0_1px_var(--primary)]"
-        : "border-border bg-transparent hover:border-primary/50"
-    }`;
 
   return (
     <div className="mx-auto max-w-5xl p-4 md:p-6 animate-fade-in">
@@ -90,38 +83,11 @@ const CreateCourse = () => {
           <div className="flex min-w-0 flex-col gap-5">
             <div>
               <span className="cv-label">Course type</span>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <button type="button" onClick={() => setFormData({ ...formData, course_type: "standard" })} className={typeBtn(formData.course_type === "standard")}>
-                  <div className="text-sm font-bold">Standard Course</div>
-                  <div className="mt-1 text-xs text-muted-foreground">Video, PDF, quizzes & assignments</div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFormData({ ...formData, course_type: "coding", category: formData.category === "general" ? "programming" : formData.category })}
-                  className={typeBtn(formData.course_type === "coding")}
-                >
-                  <div className="text-sm font-bold">Coding Course</div>
-                  <div className="mt-1 text-xs text-muted-foreground">Practice problems with compiler</div>
-                </button>
+              <div className="rounded-xl border border-border bg-muted/40 px-4 py-3">
+                <div className="text-sm font-bold">Standard Course</div>
+                <div className="mt-1 text-xs text-muted-foreground">Video, PDF, quizzes &amp; assignments</div>
               </div>
             </div>
-
-            {formData.course_type === "coding" && (
-              <div>
-                <label className="cv-label" htmlFor="course-language">Programming language</label>
-                <select
-                  id="course-language"
-                  value={formData.language}
-                  onChange={(e) => setFormData({ ...formData, language: e.target.value })}
-                  className="cv-input cv-select"
-                >
-                  <option value="python">Python (3.8.1)</option>
-                  <option value="java">Java (OpenJDK 13)</option>
-                  <option value="cpp">C++ (GCC 9.2)</option>
-                  <option value="javascript">JavaScript (Node.js)</option>
-                </select>
-              </div>
-            )}
 
             <div>
               <label className="cv-label" htmlFor="course-title">Course title</label>
