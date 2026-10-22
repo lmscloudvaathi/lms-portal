@@ -336,7 +336,7 @@ const StudentDashboard = () => {
     });
 
     // --- CODE ARENA STATES ---
-    const [codeTests, setCodeTests] = useState<CodeTest[]>([]);
+    const [, setCodeTests] = useState<CodeTest[]>([]);
     const [activeTest, setActiveTest] = useState<CodeTest | null>(null);
     const [passKeyInput, setPassKeyInput] = useState("");
     const [showPassKeyModal, setShowPassKeyModal] = useState<number | null>(null);
