@@ -15,11 +15,14 @@ services:
     plan: free
     region: oregon
     rootDir: backend
-    # --with-deps installs Chromium + OS libraries required for certificate PDF generation
-    buildCommand: pip install -r requirements.txt && python -m playwright install --with-deps chromium
+    # Chromium for HTML certificates; ReportLab fallback works if install fails.
+    # Browsers path must live inside the service tree so the runtime image keeps it.
+    buildCommand: pip install -r requirements.txt && PLAYWRIGHT_BROWSERS_PATH=./ms-playwright python -m playwright install --with-deps chromium
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /docs
     envVars:
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: ./ms-playwright
       - key: SECRET_KEY
         sync: false
       - key: ALGORITHM

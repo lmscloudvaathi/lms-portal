@@ -138,3 +138,47 @@ async def generate_certificate_pdf_with_browser(
         await page.close()
 
     return dest
+
+
+async def generate_certificate_pdf(
+    *,
+    recipient_name: str,
+    course_title: str,
+    credential_id: str,
+    issued_at=None,
+    body_text: Optional[str] = None,
+    email: Optional[str] = None,
+    output_path: Optional[Path] = None,
+    browser=None,
+) -> Path:
+    """Prefer Playwright; fall back to ReportLab when Chromium is unavailable (common on Render)."""
+    try:
+        return await generate_certificate_pdf_with_browser(
+            recipient_name=recipient_name,
+            course_title=course_title,
+            credential_id=credential_id,
+            issued_at=issued_at,
+            body_text=body_text,
+            email=email,
+            output_path=output_path,
+            browser=browser,
+        )
+    except Exception as browser_exc:
+        import logging
+
+        from pdf_certificate_reportlab import generate_certificate_pdf_with_reportlab
+
+        logging.getLogger(__name__).warning(
+            "Playwright certificate PDF failed (%s); using ReportLab fallback.",
+            browser_exc,
+        )
+        return await asyncio.to_thread(
+            generate_certificate_pdf_with_reportlab,
+            recipient_name=recipient_name,
+            course_title=course_title,
+            credential_id=credential_id,
+            issued_at=issued_at,
+            body_text=body_text,
+            email=email,
+            output_path=output_path,
+        )

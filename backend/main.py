@@ -2267,13 +2267,10 @@ async def generate_pdf_endpoint(course_id: int, db: AsyncSession = Depends(get_d
         pdf_path = await certificate_service.ensure_certificate_pdf(db, certificate, current_user, course)
     except Exception as exc:
         logger.exception("Certificate PDF error: %s", exc)
-        detail = str(exc).strip()
-        if "Chromium" in detail or "Playwright" in detail:
-            raise HTTPException(
-                status_code=500,
-                detail="Certificate PDF engine is not ready on the server. Please contact support or try again shortly.",
-            )
-        raise HTTPException(status_code=500, detail="Could not generate the certificate PDF. Please try again.")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not generate the certificate PDF. Please try again shortly.",
+        )
 
     if not pdf_path.exists() or pdf_path.stat().st_size <= 0:
         raise HTTPException(status_code=500, detail="Certificate PDF is missing. Please try again.")
@@ -2466,6 +2463,38 @@ async def payment_health():
         "payment_api": "v2-no-502",
         "razorpay_configured": _razorpay_configured(),
         "key_prefix": (RAZORPAY_KEY_ID[:12] + "…") if RAZORPAY_KEY_ID else None,
+    }
+
+
+@app.get("/api/v1/certificate/health")
+async def certificate_health():
+    """Shows which PDF backends are available (no auth, no file written)."""
+    playwright_ok = False
+    reportlab_ok = False
+    detail = None
+    try:
+        import reportlab  # noqa: F401
+        from template_assets import resolve_template_png
+
+        resolve_template_png()
+        reportlab_ok = True
+    except Exception as exc:
+        detail = f"reportlab:{exc}"
+    try:
+        from playwright.async_api import async_playwright
+
+        async with async_playwright() as p:
+            exe = p.chromium.executable_path
+            playwright_ok = bool(exe) and Path(exe).exists()
+            if not playwright_ok:
+                detail = (detail + "; " if detail else "") + "playwright:chromium binary missing"
+    except Exception as exc:
+        detail = (detail + "; " if detail else "") + f"playwright:{exc}"
+    return {
+        "reportlab": reportlab_ok,
+        "playwright": playwright_ok,
+        "ready": reportlab_ok or playwright_ok,
+        "detail": detail,
     }
 
 

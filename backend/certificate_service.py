@@ -13,7 +13,7 @@ import models
 from certificate_copy import build_course_body, default_body_text, format_recipient_name
 from certificate_email import send_certificate_email, verify_url
 from certificate_id import allocate_credential_id
-from pdf_certificate import GENERATED_DIR, generate_certificate_pdf_with_browser
+from pdf_certificate import GENERATED_DIR, generate_certificate_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +169,7 @@ async def render_certificate_pdf(
     dest = _pdf_path_for(cert)
     dest.parent.mkdir(parents=True, exist_ok=True)
     body = (cert.body_text or "").strip() or default_body_text(course.title)
-    path = await generate_certificate_pdf_with_browser(
+    path = await generate_certificate_pdf(
         recipient_name=cert.recipient_name or user.full_name,
         course_title=course.title,
         credential_id=cert.certificate_id,
