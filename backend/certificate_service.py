@@ -168,7 +168,9 @@ async def render_certificate_pdf(
 ) -> Path:
     dest = _pdf_path_for(cert)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    body = (cert.body_text or "").strip() or default_body_text(course.title)
+    # Always use the canonical course body (no URLs / verify links on the PDF).
+    body = default_body_text(course.title or "this programme")
+    cert.body_text = body
     path = await generate_certificate_pdf(
         recipient_name=cert.recipient_name or user.full_name,
         course_title=course.title,
@@ -299,14 +301,15 @@ async def ensure_certificate_pdf(
     course: models.Course,
 ) -> Path:
     path = _pdf_path_for(cert)
-    missing_body = not (cert.body_text or "").strip()
-    if missing_body:
-        cert.body_text = compose_course_body(course, await course_duration_minutes(db, course))
+    canonical = default_body_text(course.title or "this programme")
+    body_stale = (cert.body_text or "").strip() != canonical
+    if body_stale or not cert.issued_at:
+        cert.body_text = canonical
         if not cert.issued_at:
             cert.issued_at = await course_completed_at(db, user.id, course)
         await db.commit()
         await db.refresh(cert)
-    if path.exists() and path.stat().st_size > 0 and not missing_body:
+    if path.exists() and path.stat().st_size > 0 and not body_stale:
         return path
     return await render_certificate_pdf(db, cert, user, course)
 

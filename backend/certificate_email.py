@@ -58,14 +58,12 @@ def send_certificate_email(
             "or GMAIL_USER + GMAIL_APP_PASSWORD on the server."
         )
 
-    link = verify_url(credential_id)
     subject = f"Your {BRAND_NAME} certificate — {course_title}"
     html_body = f"""
     <html><body style="font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1e293b;line-height:1.6;">
       <p>Hello {name},</p>
       <p>Congratulations on completing <strong>{course_title}</strong>.</p>
-      <p>Your {BRAND_NAME} certificate of completion is attached. You can also verify it at:</p>
-      <p><a href="{link}">{link}</a></p>
+      <p>Your {BRAND_NAME} certificate of completion is attached.</p>
       <p>Certificate No: <strong>{credential_id}</strong></p>
       <p>Learn · Certify · Transform<br/>{BRAND_NAME}</p>
     </body></html>
@@ -73,7 +71,7 @@ def send_certificate_email(
     text_body = (
         f"Hello {name},\n\nCongratulations on completing {course_title}.\n"
         f"Your {BRAND_NAME} certificate is attached.\n"
-        f"Certificate No: {credential_id}\nVerify: {link}\n\n{BRAND_NAME}\n"
+        f"Certificate No: {credential_id}\n\n{BRAND_NAME}\n"
     )
     pdf_bytes = pdf_path.read_bytes()
 

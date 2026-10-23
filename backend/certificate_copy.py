@@ -5,16 +5,6 @@ import re
 from datetime import datetime
 from typing import Optional
 
-CATEGORY_LABELS = {
-    "programming": "programming",
-    "web-development": "web development",
-    "data-science": "data science",
-    "cloud-devops": "cloud and DevOps",
-    "business": "business",
-    "marketing": "marketing",
-}
-
-
 def format_recipient_name(full_name: Optional[str], email: Optional[str] = None) -> str:
     name = " ".join((full_name or "").split())
     if not name and email:
@@ -44,23 +34,6 @@ def markdown_bold_to_html(text: str) -> str:
     return re.sub(r"\*\*(.+?)\*\*", lambda match: _quoted_course_name(match.group(1)), escaped)
 
 
-def _clean_topics(text: str, limit: int = 180) -> str:
-    cleaned = re.sub(r"<[^>]+>", " ", text or "")
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
-    if not cleaned:
-        return ""
-    if len(cleaned) <= limit:
-        return cleaned
-    return cleaned[:limit].rsplit(" ", 1)[0].rstrip(",;:") + "…"
-
-
-def _duration_phrase(duration_minutes: Optional[int]) -> str:
-    if not duration_minutes or duration_minutes < 45:
-        return ""
-    hours = max(1, int(round(duration_minutes / 60.0)))
-    return f"the {hours}-hour "
-
-
 def build_course_body(
     *,
     title: str,
@@ -69,21 +42,14 @@ def build_course_body(
     category: Optional[str] = None,
     language: Optional[str] = None,
 ) -> str:
-    course_name = (title or "this programme").strip()
-    topics = _clean_topics(description or "")
-    if not topics:
-        if language:
-            topics = f"{language.strip()} and the practical skills taught in this programme"
-        else:
-            label = CATEGORY_LABELS.get((category or "").strip().lower())
-            topics = (
-                f"{label} concepts and the practical skills taught in this programme"
-                if label
-                else "the skills and outcomes taught in this Cloudvaathi programme"
-            )
+    """Standard certificate body for all courses. Extra kwargs kept for call-site compatibility."""
+    _ = (description, duration_minutes, category, language)
+    course_name = (title or "this programme").strip() or "this programme"
     return (
-        f"has successfully completed {_duration_phrase(duration_minutes)}{_quoted_course_name(course_name)} "
-        f"and demonstrated proficiency in {topics}."
+        f"for successfully completing the {course_name}. "
+        "The recipient has demonstrated dedication, active participation, and a strong understanding "
+        "of the concepts and skills covered throughout the program. "
+        "This achievement reflects their commitment to continuous learning and professional development."
     )
 
 
