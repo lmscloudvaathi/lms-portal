@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { GoogleOAuthProvider } from "@react-oauth/google";
 import axios from "axios";
@@ -28,6 +28,15 @@ import ThumbnailPicker from "./components/ThumbnailPicker";
 import Modal, { forceUnlockBodyScroll } from "./components/Modal";
 import CvToast from "./components/CvToast";
 import { COURSE_CATEGORY_OPTIONS } from "./utils/courseCategories";
+
+const CreateQuiz = lazy(() => import("./CreateQuiz"));
+const BankQuizTake = lazy(() => import("./BankQuizTake"));
+
+const RouteFallback = () => (
+  <div className="flex min-h-[40vh] items-center justify-center text-sm font-medium text-slate-500">
+    Loading…
+  </div>
+);
 
 function RouteInteractionCleanup() {
   const location = useLocation();
@@ -376,6 +385,14 @@ function App() {
           <Route path="course/:courseId/builder" element={<CourseBuilder />} />
           <Route path="assignments" element={<AssignmentManager />} />
           <Route path="quiz-responses" element={<QuizResponses />} />
+          <Route
+            path="create-quiz"
+            element={
+              <Suspense fallback={<RouteFallback />}>
+                <CreateQuiz />
+              </Suspense>
+            }
+          />
           <Route path="add-admits" element={<AddAdmits />} />
           <Route path="course/:courseId/preview" element={<CodingCourseManager />} />
           <Route path="course/:courseId/CoursePreview" element={<CoursePreview />} />
@@ -386,6 +403,16 @@ function App() {
         </Route>
         
         <Route path="/student-dashboard" element={<ProtectedRoute requiredRole="student"><StudentDashboard /></ProtectedRoute>} />
+        <Route
+          path="/quiz/:quizId"
+          element={
+            <ProtectedRoute requiredRole="student">
+              <Suspense fallback={<RouteFallback />}>
+                <BankQuizTake />
+              </Suspense>
+            </ProtectedRoute>
+          }
+        />
         <Route path="/course/:courseId" element={<ProtectedRoute requiredRole="student"><CourseProgressDashboard /></ProtectedRoute>} />
         <Route path="/course/:courseId/player" element={<ProtectedRoute requiredRole="student"><CoursePlayer /></ProtectedRoute>} />
         <Route path="*" element={<FallbackRoute />} />

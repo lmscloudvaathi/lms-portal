@@ -25,12 +25,15 @@ type AttemptRow = {
 };
 
 type QuizBlock = {
-  content_item_id: number;
+  content_item_id?: number;
+  quiz_id?: number;
   title: string;
   pass_percent: number;
   attempt_count: number;
   attempts: AttemptRow[];
 };
+
+type BankQuizOpt = { id: number; title: string; is_published?: boolean; question_count?: number };
 
 type AttemptDetail = {
   id: number;
@@ -53,13 +56,16 @@ type AttemptDetail = {
 };
 
 const QuizResponses = () => {
+  const [source, setSource] = useState<"course" | "bank">("course");
   const [courses, setCourses] = useState<QuizCourse[]>([]);
+  const [bankQuizzes, setBankQuizzes] = useState<BankQuizOpt[]>([]);
   const [courseId, setCourseId] = useState<string>("");
+  const [bankQuizId, setBankQuizId] = useState<string>("");
   const [quizzes, setQuizzes] = useState<QuizBlock[]>([]);
   const [courseTitle, setCourseTitle] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadingQuizzes, setLoadingQuizzes] = useState(false);
-  const [expandedQuiz, setExpandedQuiz] = useState<number | null>(null);
+  const [expandedQuiz, setExpandedQuiz] = useState<string | null>(null);
   const [detail, setDetail] = useState<AttemptDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [toast, setToast] = useState<{ show: boolean; message: string; type: "success" | "error" }>({
@@ -76,46 +82,74 @@ const QuizResponses = () => {
   const authHeaders = () => ({ Authorization: `Bearer ${localStorage.getItem("token")}` });
 
   useEffect(() => {
-    const loadCourses = async () => {
+    const loadMeta = async () => {
       try {
-        const res = await axios.get(`${API_BASE_URL}/instructor/quiz-courses`, {
-          headers: authHeaders(),
-        });
-        setCourses(res.data || []);
-        if (res.data?.length) setCourseId(String(res.data[0].id));
+        const [cRes, bRes] = await Promise.all([
+          axios.get(`${API_BASE_URL}/instructor/quiz-courses`, { headers: authHeaders() }),
+          axios.get(`${API_BASE_URL}/quizzes`, { headers: authHeaders() }),
+        ]);
+        setCourses(cRes.data || []);
+        setBankQuizzes(bRes.data || []);
+        if (cRes.data?.length) setCourseId(String(cRes.data[0].id));
+        if (bRes.data?.length) setBankQuizId(String(bRes.data[0].id));
       } catch {
-        triggerToast("Failed to load courses with quizzes.", "error");
+        triggerToast("Failed to load quiz sources.", "error");
       } finally {
         setLoading(false);
       }
     };
-    void loadCourses();
+    void loadMeta();
   }, []);
 
   useEffect(() => {
-    if (!courseId) {
-      setQuizzes([]);
-      return;
-    }
+    setExpandedQuiz(null);
+    setDetail(null);
+    setQuizzes([]);
+
     const load = async () => {
+      if (source === "course") {
+        if (!courseId) return;
+        setLoadingQuizzes(true);
+        try {
+          const res = await axios.get(`${API_BASE_URL}/courses/${courseId}/quiz-responses`, {
+            headers: authHeaders(),
+          });
+          setCourseTitle(res.data.course_title || "");
+          setQuizzes(res.data.quizzes || []);
+        } catch {
+          triggerToast("Failed to load quiz responses.", "error");
+          setQuizzes([]);
+        } finally {
+          setLoadingQuizzes(false);
+        }
+        return;
+      }
+
+      if (!bankQuizId) return;
       setLoadingQuizzes(true);
-      setExpandedQuiz(null);
-      setDetail(null);
       try {
-        const res = await axios.get(`${API_BASE_URL}/courses/${courseId}/quiz-responses`, {
+        const res = await axios.get(`${API_BASE_URL}/quizzes/${bankQuizId}/responses`, {
           headers: authHeaders(),
         });
-        setCourseTitle(res.data.course_title || "");
-        setQuizzes(res.data.quizzes || []);
+        setCourseTitle(res.data.title || "");
+        setQuizzes([
+          {
+            quiz_id: res.data.quiz_id,
+            title: res.data.title,
+            pass_percent: res.data.pass_percent,
+            attempt_count: res.data.attempt_count,
+            attempts: res.data.attempts || [],
+          },
+        ]);
       } catch {
-        triggerToast("Failed to load quiz responses.", "error");
+        triggerToast("Failed to load bank quiz responses.", "error");
         setQuizzes([]);
       } finally {
         setLoadingQuizzes(false);
       }
     };
     void load();
-  }, [courseId]);
+  }, [source, courseId, bankQuizId]);
 
   const openAttempt = async (attemptId: number) => {
     setDetailLoading(true);
@@ -131,6 +165,9 @@ const QuizResponses = () => {
     }
   };
 
+  const quizKey = (quiz: QuizBlock) =>
+    quiz.quiz_id != null ? `bank-${quiz.quiz_id}` : `item-${quiz.content_item_id}`;
+
   if (loading) {
     return <div className="p-6 text-muted-foreground">Loading quiz responses…</div>;
   }
@@ -141,36 +178,76 @@ const QuizResponses = () => {
         <ClipboardList className="text-primary" /> Quiz Responses
       </h1>
       <p className="mb-6 text-sm text-slate-500">
-        View student attempts for in-app quizzes on draft or published courses. Add quizzes anytime from Course Builder.
+        View student attempts for course module quizzes and standalone quizzes from Create Quiz.
       </p>
+
+      <div className="mb-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => setSource("course")}
+          className={`rounded-xl px-4 py-2 text-sm font-bold ${
+            source === "course" ? "bg-[#005EB8] text-white" : "bg-slate-100 text-slate-600"
+          }`}
+        >
+          Course module quizzes
+        </button>
+        <button
+          type="button"
+          onClick={() => setSource("bank")}
+          className={`rounded-xl px-4 py-2 text-sm font-bold ${
+            source === "bank" ? "bg-[#005EB8] text-white" : "bg-slate-100 text-slate-600"
+          }`}
+        >
+          Standalone quizzes
+        </button>
+      </div>
 
       <div className="mb-6 max-w-md">
         <label className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">
-          Course
+          {source === "course" ? "Course" : "Quiz"}
         </label>
-        <select
-          value={courseId}
-          onChange={(e) => setCourseId(e.target.value)}
-          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-primary/40"
-        >
-          {courses.length === 0 && <option value="">No courses found</option>}
-          {courses.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.title}{c.is_published ? " (Published)" : " (Draft)"}
-            </option>
-          ))}
-        </select>
+        {source === "course" ? (
+          <select
+            value={courseId}
+            onChange={(e) => setCourseId(e.target.value)}
+            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-primary/40"
+          >
+            {courses.length === 0 && <option value="">No courses found</option>}
+            {courses.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.title}{c.is_published ? " (Published)" : " (Draft)"}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <select
+            value={bankQuizId}
+            onChange={(e) => setBankQuizId(e.target.value)}
+            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-primary/40"
+          >
+            {bankQuizzes.length === 0 && <option value="">No standalone quizzes</option>}
+            {bankQuizzes.map((q) => (
+              <option key={q.id} value={q.id}>
+                {q.title}{q.is_published ? " (Published)" : " (Draft)"}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       {loadingQuizzes ? (
         <p className="text-slate-500">Loading…</p>
       ) : quizzes.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-          <p className="mb-2 font-semibold text-slate-700">No quizzes in this course yet</p>
-          <p className="mb-4 text-sm text-slate-500">
-            Open the course builder, pick a module, and add an in-app Quiz — works on published courses too.
+          <p className="mb-2 font-semibold text-slate-700">
+            {source === "course" ? "No quizzes in this course yet" : "No attempts for this quiz yet"}
           </p>
-          {courseId && (
+          <p className="mb-4 text-sm text-slate-500">
+            {source === "course"
+              ? "Add an in-app Quiz from Course Builder, or assign a standalone quiz from Create Quiz."
+              : "Students will appear here after they submit the standalone quiz."}
+          </p>
+          {source === "course" && courseId && (
             <a
               href={`/dashboard/course/${courseId}/builder`}
               className="inline-flex rounded-xl bg-[#005EB8] px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-700"
@@ -178,96 +255,101 @@ const QuizResponses = () => {
               Open Course Builder
             </a>
           )}
+          {source === "bank" && (
+            <a
+              href="/dashboard/create-quiz"
+              className="inline-flex rounded-xl bg-[#005EB8] px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-700"
+            >
+              Open Create Quiz
+            </a>
+          )}
         </div>
       ) : (
         <div className="space-y-4">
           <p className="text-sm font-semibold text-slate-600">{courseTitle}</p>
-          {quizzes.map((quiz) => (
-            <div
-              key={quiz.content_item_id}
-              className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
-            >
-              <button
-                type="button"
-                onClick={() =>
-                  setExpandedQuiz(expandedQuiz === quiz.content_item_id ? null : quiz.content_item_id)
-                }
-                className="flex w-full items-center justify-between p-5 text-left hover:bg-slate-50"
+          {quizzes.map((quiz) => {
+            const key = quizKey(quiz);
+            return (
+              <div
+                key={key}
+                className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
               >
-                <div>
-                  <h2 className="text-lg font-bold text-slate-800">{quiz.title}</h2>
-                  <p className="text-sm text-slate-500">
-                    {quiz.attempt_count} attempt{quiz.attempt_count === 1 ? "" : "s"} · Pass {quiz.pass_percent}%
-                  </p>
-                </div>
-                {expandedQuiz === quiz.content_item_id ? (
-                  <ChevronDown size={20} />
-                ) : (
-                  <ChevronRight size={20} />
-                )}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setExpandedQuiz(expandedQuiz === key ? null : key)}
+                  className="flex w-full items-center justify-between p-5 text-left hover:bg-slate-50"
+                >
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-800">{quiz.title}</h2>
+                    <p className="text-sm text-slate-500">
+                      {quiz.attempt_count} attempt{quiz.attempt_count === 1 ? "" : "s"} · Pass {quiz.pass_percent}%
+                    </p>
+                  </div>
+                  {expandedQuiz === key ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
+                </button>
 
-              {expandedQuiz === quiz.content_item_id && (
-                <div className="border-t border-slate-100 bg-slate-50 p-4">
-                  {quiz.attempts.length === 0 ? (
-                    <p className="py-6 text-center text-sm text-slate-400">No submissions yet.</p>
-                  ) : (
-                    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-                      <table className="w-full text-left text-sm">
-                        <thead className="border-b border-slate-100 bg-slate-50 text-xs uppercase text-slate-500">
-                          <tr>
-                            <th className="px-4 py-3">Student</th>
-                            <th className="px-4 py-3">Attempt</th>
-                            <th className="px-4 py-3">Score</th>
-                            <th className="px-4 py-3">Submitted</th>
-                            <th className="px-4 py-3" />
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {quiz.attempts.map((a) => (
-                            <tr key={a.id} className="border-b border-slate-50 last:border-0">
-                              <td className="px-4 py-3">
-                                <div className="flex items-center gap-2">
-                                  <User size={16} className="text-slate-400" />
-                                  <div>
-                                    <div className="font-semibold text-slate-800">{a.student_name}</div>
-                                    <div className="text-xs text-slate-400">{a.student_email}</div>
-                                  </div>
-                                </div>
-                              </td>
-                              <td className="px-4 py-3 font-semibold text-slate-600">#{a.attempt_number}</td>
-                              <td className="px-4 py-3">
-                                <span
-                                  className={`inline-flex items-center gap-1 font-bold ${
-                                    a.percent >= quiz.pass_percent ? "text-green-600" : "text-amber-600"
-                                  }`}
-                                >
-                                  <Award size={14} />
-                                  {a.percent}% ({a.score}/{a.max_score})
-                                </span>
-                              </td>
-                              <td className="px-4 py-3 text-slate-500">
-                                {a.submitted_at ? new Date(a.submitted_at).toLocaleString() : "—"}
-                              </td>
-                              <td className="px-4 py-3 text-right">
-                                <button
-                                  type="button"
-                                  onClick={() => void openAttempt(a.id)}
-                                  className="rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-bold text-[#005EB8] hover:bg-blue-100"
-                                >
-                                  View answers
-                                </button>
-                              </td>
+                {expandedQuiz === key && (
+                  <div className="border-t border-slate-100 bg-slate-50 p-4">
+                    {quiz.attempts.length === 0 ? (
+                      <p className="py-6 text-center text-sm text-slate-400">No submissions yet.</p>
+                    ) : (
+                      <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                        <table className="w-full text-left text-sm">
+                          <thead className="border-b border-slate-100 bg-slate-50 text-xs uppercase text-slate-500">
+                            <tr>
+                              <th className="px-4 py-3">Student</th>
+                              <th className="px-4 py-3">Attempt</th>
+                              <th className="px-4 py-3">Score</th>
+                              <th className="px-4 py-3">Submitted</th>
+                              <th className="px-4 py-3" />
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
+                          </thead>
+                          <tbody>
+                            {quiz.attempts.map((a) => (
+                              <tr key={a.id} className="border-b border-slate-50 last:border-0">
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center gap-2">
+                                    <User size={16} className="text-slate-400" />
+                                    <div>
+                                      <div className="font-semibold text-slate-800">{a.student_name}</div>
+                                      <div className="text-xs text-slate-400">{a.student_email}</div>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 font-semibold text-slate-600">#{a.attempt_number}</td>
+                                <td className="px-4 py-3">
+                                  <span
+                                    className={`inline-flex items-center gap-1 font-bold ${
+                                      a.percent >= quiz.pass_percent ? "text-green-600" : "text-amber-600"
+                                    }`}
+                                  >
+                                    <Award size={14} />
+                                    {a.percent}% ({a.score}/{a.max_score})
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 text-slate-500">
+                                  {a.submitted_at ? new Date(a.submitted_at).toLocaleString() : "—"}
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                  <button
+                                    type="button"
+                                    onClick={() => void openAttempt(a.id)}
+                                    className="rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-bold text-[#005EB8] hover:bg-blue-100"
+                                  >
+                                    View answers
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -308,12 +390,12 @@ const QuizResponses = () => {
                     <p className="font-semibold text-slate-800">{ans.prompt}</p>
                     <p className="mt-2 text-sm">
                       <span className="text-slate-500">Answer: </span>
-                      {ans.selected_options.map((o) => o.label).join(", ") || "—"}
+                      {ans.selected_options.map((o) => o.label).join("; ") || "—"}
                     </p>
                     <p className="text-sm">
                       <span className="text-slate-500">Correct: </span>
                       <span className="font-medium text-green-700">
-                        {ans.correct_options.map((o) => o.label).join(", ")}
+                        {ans.correct_options.map((o) => o.label).join("; ")}
                       </span>
                     </p>
                   </div>

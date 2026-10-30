@@ -149,6 +149,16 @@ export default function CourseProgressDashboard() {
   const { courseId } = useParams();
   const navigate = useNavigate();
   const [data, setData] = useState<DashboardPayload | null>(null);
+  const [assignedQuizzes, setAssignedQuizzes] = useState<Array<{
+    id: number;
+    title: string;
+    description?: string | null;
+    pass_percent: number;
+    question_count: number;
+    best_percent?: number | null;
+    passed?: boolean;
+    attempt_count?: number;
+  }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [openModules, setOpenModules] = useState<number[]>([]);
@@ -167,10 +177,16 @@ export default function CourseProgressDashboard() {
     setLoading(true);
     setError("");
     try {
-      const res = await axios.get(`${API_BASE_URL}/courses/${courseId}/progress-dashboard`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const [res, quizRes] = await Promise.all([
+        axios.get(`${API_BASE_URL}/courses/${courseId}/progress-dashboard`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        axios.get(`${API_BASE_URL}/courses/${courseId}/assigned-quizzes`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => ({ data: [] })),
+      ]);
       setData(res.data);
+      setAssignedQuizzes(Array.isArray(quizRes.data) ? quizRes.data : []);
       const incomplete = (res.data.modules || [])
         .filter((module: ModuleRow) => module.total > 0 && module.completed < module.total)
         .map((module: ModuleRow) => module.id);
@@ -448,6 +464,44 @@ export default function CourseProgressDashboard() {
                   </div>
                 );
               })}
+            </div>
+          </section>
+        )}
+
+        {assignedQuizzes.length > 0 && (
+          <section className="bg-white rounded-2xl border border-slate-200 p-6">
+            <div className="mb-4 flex items-center gap-2">
+              <HelpCircle size={18} className="text-[#005EB8]" />
+              <h3 className="font-extrabold text-slate-800">Course quizzes</h3>
+            </div>
+            <div className="space-y-3">
+              {assignedQuizzes.map((quiz) => (
+                <div
+                  key={quiz.id}
+                  className="flex flex-col gap-3 rounded-xl border border-slate-100 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-800">{quiz.title}</p>
+                    <p className="text-xs font-semibold text-slate-400 mt-1">
+                      {quiz.question_count} question{quiz.question_count === 1 ? "" : "s"} · Pass {quiz.pass_percent}%
+                      {quiz.best_percent != null ? ` · Best ${quiz.best_percent}%` : ""}
+                      {quiz.passed ? " · Passed" : ""}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={locked}
+                    onClick={() => navigate(`/quiz/${quiz.id}`)}
+                    className={`rounded-xl px-4 py-2 text-sm font-bold ${
+                      locked
+                        ? "cursor-not-allowed bg-slate-200 text-slate-400"
+                        : "bg-[#005EB8] text-white hover:bg-blue-700"
+                    }`}
+                  >
+                    {quiz.attempt_count ? "Retake" : "Start"}
+                  </button>
+                </div>
+              ))}
             </div>
           </section>
         )}

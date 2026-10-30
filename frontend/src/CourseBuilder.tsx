@@ -1765,15 +1765,9 @@ const CourseBuilder = () => {
                         ) : activeModal === "Quiz" ? (
                             <div style={{ display: "flex", flexDirection: "column", gap: "20px", maxHeight: "65vh", overflowY: "auto", paddingRight: "8px" }}>
                                 <div><label style={labelStyle}>Quiz Title</label><input value={itemTitle} onChange={(e) => setItemTitle(e.target.value)} placeholder="e.g. Module 1 Check" style={inputStyle} /></div>
-                                <div style={{ display: "flex", gap: "12px" }}>
-                                    <div style={{ flex: 1 }}>
-                                        <label style={labelStyle}>Time limit (minutes, optional)</label>
-                                        <input type="number" min={1} value={duration} onChange={(e) => setDuration(e.target.value)} placeholder="e.g. 20" style={inputStyle} />
-                                    </div>
-                                    <div style={{ flex: 1 }}>
-                                        <label style={labelStyle}>Pass percent</label>
-                                        <input type="number" min={0} max={100} value={passPercent} onChange={(e) => setPassPercent(e.target.value)} placeholder="70" style={inputStyle} />
-                                    </div>
+                                <div>
+                                    <label style={labelStyle}>Pass percent</label>
+                                    <input type="number" min={0} max={100} value={passPercent} onChange={(e) => setPassPercent(e.target.value)} placeholder="70" style={inputStyle} />
                                 </div>
                                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                                     <label style={{ ...labelStyle, marginBottom: 0 }}>Questions</label>

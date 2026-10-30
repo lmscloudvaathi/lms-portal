@@ -75,17 +75,52 @@ class ContentItem(Base):
     quiz_attempts = relationship("QuizAttempt", back_populates="content_item", cascade="all, delete-orphan")
 
 
+class Quiz(Base):
+    """Standalone quiz bank entry (optional course assignments)."""
+    __tablename__ = "quizzes"
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    image_url = Column(Text, nullable=True)
+    pass_percent = Column(Integer, nullable=True, default=70)
+    duration = Column(Integer, nullable=True)  # minutes
+    # null / 0 = unlimited attempts per student
+    max_attempts = Column(Integer, nullable=True)
+    is_published = Column(Boolean, default=False)
+    creator_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    creator = relationship("User")
+    questions = relationship("QuizQuestion", back_populates="quiz", cascade="all, delete-orphan")
+    attempts = relationship("QuizAttempt", back_populates="quiz", cascade="all, delete-orphan")
+    assignments = relationship("QuizCourseAssignment", back_populates="quiz", cascade="all, delete-orphan")
+
+
+class QuizCourseAssignment(Base):
+    __tablename__ = "quiz_course_assignments"
+    id = Column(Integer, primary_key=True, index=True)
+    quiz_id = Column(Integer, ForeignKey("quizzes.id"), nullable=False, index=True)
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False, index=True)
+
+    quiz = relationship("Quiz", back_populates="assignments")
+    course = relationship("Course")
+    __table_args__ = (UniqueConstraint("quiz_id", "course_id", name="uq_quiz_course"),)
+
+
 class QuizQuestion(Base):
     __tablename__ = "quiz_questions"
     id = Column(Integer, primary_key=True, index=True)
-    content_item_id = Column(Integer, ForeignKey("content_items.id"), nullable=False, index=True)
+    # Lesson quiz (module content) OR bank quiz — exactly one should be set for new rows
+    content_item_id = Column(Integer, ForeignKey("content_items.id"), nullable=True, index=True)
+    quiz_id = Column(Integer, ForeignKey("quizzes.id"), nullable=True, index=True)
     prompt = Column(Text, nullable=False)
-    # single | true_false | multi
+    # single | true_false | multi | matching
     question_type = Column(String(32), nullable=False, default="single")
     order = Column(Integer, default=0)
     points = Column(Integer, default=1)
 
     content_item = relationship("ContentItem", back_populates="quiz_questions")
+    quiz = relationship("Quiz", back_populates="questions")
     options = relationship("QuizOption", back_populates="question", cascade="all, delete-orphan")
 
 
@@ -96,6 +131,9 @@ class QuizOption(Base):
     label = Column(String(1000), nullable=False)
     is_correct = Column(Boolean, default=False)
     order = Column(Integer, default=0)
+    # matching: "left" | "right"; pairs share the same match_key
+    match_side = Column(String(16), nullable=True)
+    match_key = Column(String(64), nullable=True)
 
     question = relationship("QuizQuestion", back_populates="options")
 
@@ -103,7 +141,8 @@ class QuizOption(Base):
 class QuizAttempt(Base):
     __tablename__ = "quiz_attempts"
     id = Column(Integer, primary_key=True, index=True)
-    content_item_id = Column(Integer, ForeignKey("content_items.id"), nullable=False, index=True)
+    content_item_id = Column(Integer, ForeignKey("content_items.id"), nullable=True, index=True)
+    quiz_id = Column(Integer, ForeignKey("quizzes.id"), nullable=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     score = Column(Integer, default=0)
     max_score = Column(Integer, default=0)
@@ -112,6 +151,7 @@ class QuizAttempt(Base):
     submitted_at = Column(DateTime, default=datetime.utcnow)
 
     content_item = relationship("ContentItem", back_populates="quiz_attempts")
+    quiz = relationship("Quiz", back_populates="attempts")
     student = relationship("User")
     answers = relationship("QuizAnswer", back_populates="attempt", cascade="all, delete-orphan")
 
@@ -121,7 +161,7 @@ class QuizAnswer(Base):
     id = Column(Integer, primary_key=True, index=True)
     attempt_id = Column(Integer, ForeignKey("quiz_attempts.id"), nullable=False, index=True)
     question_id = Column(Integer, ForeignKey("quiz_questions.id"), nullable=False, index=True)
-    selected_option_ids = Column(Text, nullable=True)  # JSON list of option ids
+    selected_option_ids = Column(Text, nullable=True)  # JSON list of option ids OR match map
     is_correct = Column(Boolean, default=False)
     points_awarded = Column(Integer, default=0)
 

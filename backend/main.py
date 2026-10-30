@@ -102,12 +102,121 @@ async def _ensure_certificate_columns(conn):
             pass
 
 
+async def _sqlite_rebuild_quiz_nullable(conn):
+    """SQLite cannot ALTER NOT NULL → NULL; rebuild quiz_questions / quiz_attempts when needed."""
+    try:
+        info = await conn.execute(text("PRAGMA table_info(quiz_questions)"))
+        cols = {row[1]: row for row in info.fetchall()}
+    except Exception:
+        return
+    if "content_item_id" in cols and cols["content_item_id"][3] == 1:
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS quiz_questions_new (
+                id INTEGER NOT NULL PRIMARY KEY,
+                content_item_id INTEGER,
+                quiz_id INTEGER,
+                prompt TEXT NOT NULL,
+                question_type VARCHAR(32) NOT NULL DEFAULT 'single',
+                "order" INTEGER DEFAULT 0,
+                points INTEGER DEFAULT 1,
+                FOREIGN KEY(content_item_id) REFERENCES content_items (id),
+                FOREIGN KEY(quiz_id) REFERENCES quizzes (id)
+            )
+        """))
+        has_quiz_id = "quiz_id" in cols
+        if has_quiz_id:
+            await conn.execute(text("""
+                INSERT INTO quiz_questions_new (id, content_item_id, quiz_id, prompt, question_type, "order", points)
+                SELECT id, content_item_id, quiz_id, prompt, question_type, "order", points FROM quiz_questions
+            """))
+        else:
+            await conn.execute(text("""
+                INSERT INTO quiz_questions_new (id, content_item_id, quiz_id, prompt, question_type, "order", points)
+                SELECT id, content_item_id, NULL, prompt, question_type, "order", points FROM quiz_questions
+            """))
+        await conn.execute(text("DROP TABLE quiz_questions"))
+        await conn.execute(text("ALTER TABLE quiz_questions_new RENAME TO quiz_questions"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_quiz_questions_content_item_id ON quiz_questions (content_item_id)"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_quiz_questions_quiz_id ON quiz_questions (quiz_id)"))
+
+    try:
+        info2 = await conn.execute(text("PRAGMA table_info(quiz_attempts)"))
+        cols2 = {row[1]: row for row in info2.fetchall()}
+    except Exception:
+        return
+    if "content_item_id" in cols2 and cols2["content_item_id"][3] == 1:
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS quiz_attempts_new (
+                id INTEGER NOT NULL PRIMARY KEY,
+                content_item_id INTEGER,
+                quiz_id INTEGER,
+                user_id INTEGER NOT NULL,
+                score INTEGER DEFAULT 0,
+                max_score INTEGER DEFAULT 0,
+                percent INTEGER DEFAULT 0,
+                started_at DATETIME,
+                submitted_at DATETIME,
+                FOREIGN KEY(content_item_id) REFERENCES content_items (id),
+                FOREIGN KEY(quiz_id) REFERENCES quizzes (id),
+                FOREIGN KEY(user_id) REFERENCES users (id)
+            )
+        """))
+        has_quiz_id = "quiz_id" in cols2
+        if has_quiz_id:
+            await conn.execute(text("""
+                INSERT INTO quiz_attempts_new
+                (id, content_item_id, quiz_id, user_id, score, max_score, percent, started_at, submitted_at)
+                SELECT id, content_item_id, quiz_id, user_id, score, max_score, percent, started_at, submitted_at
+                FROM quiz_attempts
+            """))
+        else:
+            await conn.execute(text("""
+                INSERT INTO quiz_attempts_new
+                (id, content_item_id, quiz_id, user_id, score, max_score, percent, started_at, submitted_at)
+                SELECT id, content_item_id, NULL, user_id, score, max_score, percent, started_at, submitted_at
+                FROM quiz_attempts
+            """))
+        await conn.execute(text("DROP TABLE quiz_attempts"))
+        await conn.execute(text("ALTER TABLE quiz_attempts_new RENAME TO quiz_attempts"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_quiz_attempts_content_item_id ON quiz_attempts (content_item_id)"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_quiz_attempts_quiz_id ON quiz_attempts (quiz_id)"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_quiz_attempts_user_id ON quiz_attempts (user_id)"))
+
+
 async def _ensure_quiz_columns(conn):
-    """Add pass_percent on content_items for existing DBs (create_all won't alter columns)."""
+    """Add quiz bank / matching columns for existing DBs (create_all won't alter columns)."""
     if IS_SQLITE:
-        stmts = ("ALTER TABLE content_items ADD COLUMN pass_percent INTEGER DEFAULT 70",)
-    else:
-        stmts = ("ALTER TABLE content_items ADD COLUMN IF NOT EXISTS pass_percent INTEGER DEFAULT 70;",)
+        stmts = (
+            "ALTER TABLE content_items ADD COLUMN pass_percent INTEGER DEFAULT 70",
+            "ALTER TABLE quiz_questions ADD COLUMN quiz_id INTEGER",
+            "ALTER TABLE quiz_attempts ADD COLUMN quiz_id INTEGER",
+            "ALTER TABLE quiz_options ADD COLUMN match_side VARCHAR(16)",
+            "ALTER TABLE quiz_options ADD COLUMN match_key VARCHAR(64)",
+            "ALTER TABLE quizzes ADD COLUMN image_url TEXT",
+            "ALTER TABLE quizzes ADD COLUMN max_attempts INTEGER",
+        )
+        for stmt in stmts:
+            try:
+                await conn.execute(text(stmt))
+            except Exception:
+                pass
+        try:
+            await _sqlite_rebuild_quiz_nullable(conn)
+        except Exception as e:
+            logger.warning("SQLite quiz nullable rebuild skipped: %s", e)
+        return
+
+    stmts = (
+        "ALTER TABLE content_items ADD COLUMN IF NOT EXISTS pass_percent INTEGER DEFAULT 70;",
+        "ALTER TABLE quiz_questions ADD COLUMN IF NOT EXISTS quiz_id INTEGER;",
+        "ALTER TABLE quiz_attempts ADD COLUMN IF NOT EXISTS quiz_id INTEGER;",
+        "ALTER TABLE quiz_options ADD COLUMN IF NOT EXISTS match_side VARCHAR(16);",
+        "ALTER TABLE quiz_options ADD COLUMN IF NOT EXISTS match_key VARCHAR(64);",
+        "ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS image_url TEXT;",
+        "ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS max_attempts INTEGER;",
+        "ALTER TABLE quiz_questions MODIFY content_item_id INT NULL;",
+        "ALTER TABLE quiz_attempts MODIFY content_item_id INT NULL;",
+    )
     for stmt in stmts:
         try:
             await conn.execute(text(stmt))
@@ -315,11 +424,13 @@ class QuizOptionInput(BaseModel):
     is_correct: bool = False
     order: Optional[int] = 0
     id: Optional[int] = None
+    match_side: Optional[str] = None  # left | right (matching)
+    match_key: Optional[str] = None
 
 
 class QuizQuestionInput(BaseModel):
     prompt: str
-    question_type: str = "single"  # single | true_false | multi
+    question_type: str = "single"  # single | true_false | multi | matching
     points: int = 1
     order: Optional[int] = 0
     options: List[QuizOptionInput] = []
@@ -336,10 +447,48 @@ class QuizPutRequest(BaseModel):
 class QuizSubmitAnswer(BaseModel):
     question_id: int
     selected_option_ids: List[int] = []
+    # matching: left_option_id (as str key) -> right_option_id
+    match_map: Optional[Dict[str, int]] = None
 
 
 class QuizSubmitRequest(BaseModel):
     answers: List[QuizSubmitAnswer] = []
+
+
+def _normalize_max_attempts(value: Optional[int]) -> Optional[int]:
+    """None/0/negative => unlimited (stored as NULL). Positive => capped attempts."""
+    if value is None:
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+class BankQuizCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+    pass_percent: Optional[int] = 70
+    duration: Optional[int] = None
+    max_attempts: Optional[int] = None
+    is_published: bool = False
+    course_ids: Optional[List[int]] = None
+
+
+class BankQuizUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+    pass_percent: Optional[int] = None
+    duration: Optional[int] = None
+    max_attempts: Optional[int] = None
+    is_published: Optional[bool] = None
+
+
+class BankQuizAssignments(BaseModel):
+    course_ids: List[int] = []
 
 class ViolationReport(BaseModel):
     lesson_id: int
@@ -3192,7 +3341,7 @@ async def mark_item_complete(item_id: int, db: AsyncSession = Depends(get_db), c
 
 # --- Native Quiz helpers & APIs ---
 
-VALID_QUIZ_TYPES = {"single", "true_false", "multi"}
+VALID_QUIZ_TYPES = {"single", "true_false", "multi", "matching"}
 
 
 async def _clone_quiz_questions(db: AsyncSession, source_item_id: int, target_item_id: int):
@@ -3215,6 +3364,8 @@ async def _clone_quiz_questions(db: AsyncSession, source_item_id: int, target_it
                     label=o.label,
                     is_correct=bool(o.is_correct),
                     order=o.order,
+                    match_side=getattr(o, "match_side", None),
+                    match_key=getattr(o, "match_key", None),
                 )
             )
 
@@ -3248,28 +3399,66 @@ async def _ensure_enrolled_or_staff(user: models.User, course_id: int, db: Async
 
 def _serialize_quiz_question(q: models.QuizQuestion, include_correct: bool = True) -> dict:
     opts = sorted(q.options or [], key=lambda o: (o.order is None, o.order if o.order is not None else 10**9, o.id))
+    serialized_opts = []
+    for o in opts:
+        row = {
+            "id": o.id,
+            "label": o.label,
+            "order": o.order,
+            "match_side": getattr(o, "match_side", None),
+        }
+        if include_correct:
+            row["is_correct"] = bool(o.is_correct)
+            row["match_key"] = getattr(o, "match_key", None)
+        serialized_opts.append(row)
     return {
         "id": q.id,
         "prompt": q.prompt,
         "question_type": q.question_type,
         "order": q.order,
         "points": q.points or 1,
-        "options": [
-            {
-                "id": o.id,
-                "label": o.label,
-                "order": o.order,
-                **({"is_correct": bool(o.is_correct)} if include_correct else {}),
-            }
-            for o in opts
-        ],
+        "options": serialized_opts,
     }
 
 
-def _grade_selection(question: models.QuizQuestion, selected_ids: List[int]) -> Tuple[bool, int]:
+def _grade_matching(question: models.QuizQuestion, match_map: Optional[Dict[str, int]]) -> Tuple[bool, int]:
+    points = question.points or 1
+    lefts = [o for o in (question.options or []) if (getattr(o, "match_side", None) or "").lower() == "left"]
+    rights_by_key = {
+        (getattr(o, "match_key", None) or ""): o.id
+        for o in (question.options or [])
+        if (getattr(o, "match_side", None) or "").lower() == "right"
+    }
+    if not lefts or not rights_by_key:
+        return False, 0
+    mmap = match_map or {}
+    for left in lefts:
+        key = getattr(left, "match_key", None) or ""
+        expected_right = rights_by_key.get(key)
+        if expected_right is None:
+            return False, 0
+        got = mmap.get(str(left.id))
+        if got is None:
+            got = mmap.get(left.id) if isinstance(mmap, dict) else None  # type: ignore
+        try:
+            got_int = int(got) if got is not None else None
+        except (TypeError, ValueError):
+            got_int = None
+        if got_int != expected_right:
+            return False, 0
+    return True, points
+
+
+def _grade_selection(
+    question: models.QuizQuestion,
+    selected_ids: List[int],
+    match_map: Optional[Dict[str, int]] = None,
+) -> Tuple[bool, int]:
+    points = question.points or 1
+    if question.question_type == "matching":
+        return _grade_matching(question, match_map)
     correct_ids = {o.id for o in (question.options or []) if o.is_correct}
     selected_set = set(selected_ids or [])
-    points = question.points or 1
     if question.question_type == "multi":
         ok = selected_set == correct_ids and len(correct_ids) > 0
     else:
@@ -3286,6 +3475,201 @@ async def _load_quiz_questions(item_id: int, db: AsyncSession) -> List[models.Qu
         .order_by(models.QuizQuestion.order, models.QuizQuestion.id)
     )
     return list(res.scalars().all())
+
+
+async def _load_bank_quiz_questions(quiz_id: int, db: AsyncSession) -> List[models.QuizQuestion]:
+    res = await db.execute(
+        select(models.QuizQuestion)
+        .options(selectinload(models.QuizQuestion.options))
+        .where(models.QuizQuestion.quiz_id == quiz_id)
+        .order_by(models.QuizQuestion.order, models.QuizQuestion.id)
+    )
+    return list(res.scalars().all())
+
+
+async def _get_bank_quiz_or_404(quiz_id: int, db: AsyncSession) -> models.Quiz:
+    res = await db.execute(select(models.Quiz).where(models.Quiz.id == quiz_id))
+    quiz = res.scalars().first()
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    return quiz
+
+
+def _can_manage_bank_quiz(user: models.User, quiz: models.Quiz) -> bool:
+    if not _is_staff(user):
+        return False
+    if user.role == "admin" or is_super_admin_email(user.email):
+        return True
+    return quiz.creator_id is None or quiz.creator_id == user.id
+
+
+async def _serialize_bank_quiz(
+    quiz: models.Quiz,
+    db: AsyncSession,
+    *,
+    include_questions: bool = False,
+    include_correct: bool = True,
+) -> dict:
+    assign_res = await db.execute(
+        select(models.QuizCourseAssignment.course_id).where(models.QuizCourseAssignment.quiz_id == quiz.id)
+    )
+    course_ids = list(assign_res.scalars().all())
+    q_count = 0
+    questions_payload = None
+    if include_questions:
+        questions = await _load_bank_quiz_questions(quiz.id, db)
+        q_count = len(questions)
+        questions_payload = [_serialize_quiz_question(q, include_correct=include_correct) for q in questions]
+    else:
+        count_res = await db.execute(
+            select(func.count()).select_from(models.QuizQuestion).where(models.QuizQuestion.quiz_id == quiz.id)
+        )
+        q_count = int(count_res.scalar() or 0)
+    max_attempts = getattr(quiz, "max_attempts", None)
+    payload = {
+        "id": quiz.id,
+        "title": quiz.title,
+        "description": quiz.description,
+        "image_url": getattr(quiz, "image_url", None),
+        "pass_percent": quiz.pass_percent if quiz.pass_percent is not None else 70,
+        "duration": quiz.duration,
+        "max_attempts": max_attempts if max_attempts and int(max_attempts) > 0 else None,
+        "is_published": bool(quiz.is_published),
+        "creator_id": quiz.creator_id,
+        "created_at": quiz.created_at.isoformat() if quiz.created_at else None,
+        "course_ids": course_ids,
+        "question_count": q_count,
+    }
+    if questions_payload is not None:
+        payload["questions"] = questions_payload
+    return payload
+
+
+async def _set_quiz_assignments(db: AsyncSession, quiz_id: int, course_ids: List[int]):
+    await db.execute(
+        delete(models.QuizCourseAssignment).where(models.QuizCourseAssignment.quiz_id == quiz_id)
+    )
+    unique_ids = sorted({int(cid) for cid in (course_ids or []) if cid})
+    if unique_ids:
+        courses = await db.execute(select(models.Course.id).where(models.Course.id.in_(unique_ids)))
+        found = set(courses.scalars().all())
+        missing = [cid for cid in unique_ids if cid not in found]
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Unknown course ids: {missing}")
+        for cid in unique_ids:
+            db.add(models.QuizCourseAssignment(quiz_id=quiz_id, course_id=cid))
+
+
+def _normalize_question_options(qtype: str, q_in: QuizQuestionInput, qi: int) -> List[dict]:
+    if qtype == "matching":
+        options_in = []
+        for i, o in enumerate(q_in.options or []):
+            side = (o.match_side or "").strip().lower()
+            key = (o.match_key or "").strip()
+            label = (o.label or "").strip()
+            if not label or side not in ("left", "right") or not key:
+                continue
+            options_in.append({
+                "label": label,
+                "is_correct": False,
+                "order": o.order if o.order is not None else i,
+                "match_side": side,
+                "match_key": key,
+            })
+        lefts = [o for o in options_in if o["match_side"] == "left"]
+        rights = [o for o in options_in if o["match_side"] == "right"]
+        if len(lefts) < 1 or len(rights) < 1:
+            raise HTTPException(status_code=400, detail=f"Question {qi + 1}: matching needs left and right items")
+        left_keys = {o["match_key"] for o in lefts}
+        right_keys = {o["match_key"] for o in rights}
+        if left_keys != right_keys:
+            raise HTTPException(status_code=400, detail=f"Question {qi + 1}: matching left/right keys must pair")
+        return options_in
+
+    options_in = [
+        {
+            "label": (o.label or "").strip(),
+            "is_correct": bool(o.is_correct),
+            "order": o.order if o.order is not None else i,
+            "match_side": None,
+            "match_key": None,
+        }
+        for i, o in enumerate(q_in.options or [])
+    ]
+    if qtype == "true_false":
+        if len(options_in) < 2:
+            options_in = [
+                {"label": "True", "is_correct": False, "order": 0, "match_side": None, "match_key": None},
+                {"label": "False", "is_correct": False, "order": 1, "match_side": None, "match_key": None},
+            ]
+        if not any(o["is_correct"] for o in options_in):
+            options_in[0]["is_correct"] = True
+
+    if len(options_in) < 2:
+        raise HTTPException(status_code=400, detail=f"Question {qi + 1} needs at least 2 options")
+
+    correct_count = sum(1 for o in options_in if o["is_correct"])
+    if qtype == "multi":
+        if correct_count < 1:
+            raise HTTPException(status_code=400, detail=f"Question {qi + 1}: mark at least one correct option")
+    else:
+        if correct_count != 1:
+            raise HTTPException(status_code=400, detail=f"Question {qi + 1}: mark exactly one correct option")
+    return options_in
+
+
+async def _replace_questions_for_owner(
+    db: AsyncSession,
+    questions_in: List[QuizQuestionInput],
+    *,
+    content_item_id: Optional[int] = None,
+    quiz_id: Optional[int] = None,
+):
+    if content_item_id is not None:
+        existing_qs = await _load_quiz_questions(content_item_id, db)
+    elif quiz_id is not None:
+        existing_qs = await _load_bank_quiz_questions(quiz_id, db)
+    else:
+        raise ValueError("content_item_id or quiz_id required")
+
+    existing_q_ids = [q.id for q in existing_qs]
+    if existing_q_ids:
+        await db.execute(delete(models.QuizOption).where(models.QuizOption.question_id.in_(existing_q_ids)))
+        await db.execute(delete(models.QuizQuestion).where(models.QuizQuestion.id.in_(existing_q_ids)))
+        await db.flush()
+
+    for qi, q_in in enumerate(questions_in or []):
+        qtype = (q_in.question_type or "single").strip().lower()
+        if qtype not in VALID_QUIZ_TYPES:
+            raise HTTPException(status_code=400, detail=f"Invalid question_type: {qtype}")
+        prompt = (q_in.prompt or "").strip()
+        if not prompt:
+            raise HTTPException(status_code=400, detail=f"Question {qi + 1} is missing a prompt")
+        options_in = _normalize_question_options(qtype, q_in, qi)
+        q = models.QuizQuestion(
+            content_item_id=content_item_id,
+            quiz_id=quiz_id,
+            prompt=prompt,
+            question_type=qtype,
+            order=q_in.order if q_in.order is not None else qi,
+            points=max(1, int(q_in.points or 1)),
+        )
+        db.add(q)
+        await db.flush()
+        for oi, o_in in enumerate(options_in):
+            label = o_in["label"]
+            if not label:
+                raise HTTPException(status_code=400, detail=f"Question {qi + 1} has an empty option")
+            db.add(
+                models.QuizOption(
+                    question_id=q.id,
+                    label=label,
+                    is_correct=bool(o_in["is_correct"]),
+                    order=int(o_in["order"]) if o_in["order"] is not None else oi,
+                    match_side=o_in.get("match_side"),
+                    match_key=o_in.get("match_key"),
+                )
+            )
 
 
 @app.get("/api/v1/content/{item_id}/quiz")
@@ -3331,67 +3715,7 @@ async def put_quiz_admin(
     elif item.pass_percent is None:
         item.pass_percent = 70
 
-    # Replace question set (attempts keep historical answers by question_id; new ids after replace)
-    existing_qs = await _load_quiz_questions(item_id, db)
-    existing_q_ids = [q.id for q in existing_qs]
-    if existing_q_ids:
-        await db.execute(delete(models.QuizOption).where(models.QuizOption.question_id.in_(existing_q_ids)))
-        await db.execute(delete(models.QuizQuestion).where(models.QuizQuestion.id.in_(existing_q_ids)))
-        await db.flush()
-
-    for qi, q_in in enumerate(body.questions or []):
-        qtype = (q_in.question_type or "single").strip().lower()
-        if qtype not in VALID_QUIZ_TYPES:
-            raise HTTPException(status_code=400, detail=f"Invalid question_type: {qtype}")
-        prompt = (q_in.prompt or "").strip()
-        if not prompt:
-            raise HTTPException(status_code=400, detail=f"Question {qi + 1} is missing a prompt")
-
-        options_in = [
-            {"label": (o.label or "").strip(), "is_correct": bool(o.is_correct), "order": o.order if o.order is not None else i}
-            for i, o in enumerate(q_in.options or [])
-        ]
-        if qtype == "true_false":
-            if len(options_in) < 2:
-                options_in = [
-                    {"label": "True", "is_correct": False, "order": 0},
-                    {"label": "False", "is_correct": False, "order": 1},
-                ]
-            if not any(o["is_correct"] for o in options_in):
-                options_in[0]["is_correct"] = True
-
-        if len(options_in) < 2:
-            raise HTTPException(status_code=400, detail=f"Question {qi + 1} needs at least 2 options")
-
-        correct_count = sum(1 for o in options_in if o["is_correct"])
-        if qtype == "multi":
-            if correct_count < 1:
-                raise HTTPException(status_code=400, detail=f"Question {qi + 1}: mark at least one correct option")
-        else:
-            if correct_count != 1:
-                raise HTTPException(status_code=400, detail=f"Question {qi + 1}: mark exactly one correct option")
-
-        q = models.QuizQuestion(
-            content_item_id=item.id,
-            prompt=prompt,
-            question_type=qtype,
-            order=q_in.order if q_in.order is not None else qi,
-            points=max(1, int(q_in.points or 1)),
-        )
-        db.add(q)
-        await db.flush()
-        for oi, o_in in enumerate(options_in):
-            label = o_in["label"]
-            if not label:
-                raise HTTPException(status_code=400, detail=f"Question {qi + 1} has an empty option")
-            db.add(
-                models.QuizOption(
-                    question_id=q.id,
-                    label=label,
-                    is_correct=bool(o_in["is_correct"]),
-                    order=int(o_in["order"]) if o_in["order"] is not None else oi,
-                )
-            )
+    await _replace_questions_for_owner(db, body.questions or [], content_item_id=item.id)
 
     await db.commit()
     questions = await _load_quiz_questions(item_id, db)
@@ -3481,7 +3805,7 @@ async def submit_quiz(
     if not questions:
         raise HTTPException(status_code=400, detail="This quiz has no questions yet")
 
-    answer_map = {a.question_id: list(a.selected_option_ids or []) for a in (body.answers or [])}
+    answer_by_q = {a.question_id: a for a in (body.answers or [])}
     total_points = 0
     earned = 0
     review = []
@@ -3499,25 +3823,47 @@ async def submit_quiz(
     await db.flush()
 
     for q in questions:
-        selected = answer_map.get(q.id, [])
-        # Validate option ids belong to this question
+        ans = answer_by_q.get(q.id)
+        selected = list(ans.selected_option_ids or []) if ans else []
+        match_map = dict(ans.match_map or {}) if ans and ans.match_map else None
         valid_ids = {o.id for o in (q.options or [])}
         selected = [sid for sid in selected if sid in valid_ids]
-        ok, pts = _grade_selection(q, selected)
+        if match_map:
+            match_map = {str(k): int(v) for k, v in match_map.items() if int(v) in valid_ids}
+        ok, pts = _grade_selection(q, selected, match_map)
         q_points = q.points or 1
         total_points += q_points
         earned += pts
+        stored = json.dumps(match_map) if q.question_type == "matching" else json.dumps(selected)
         db.add(
             models.QuizAnswer(
                 attempt_id=attempt.id,
                 question_id=q.id,
-                selected_option_ids=json.dumps(selected),
+                selected_option_ids=stored,
                 is_correct=ok,
                 points_awarded=pts,
             )
         )
-        correct_opts = [o for o in (q.options or []) if o.is_correct]
-        selected_opts = [o for o in (q.options or []) if o.id in set(selected)]
+        if q.question_type == "matching":
+            lefts = [o for o in (q.options or []) if (getattr(o, "match_side", None) or "").lower() == "left"]
+            rights = {o.id: o for o in (q.options or []) if (getattr(o, "match_side", None) or "").lower() == "right"}
+            rights_by_key = {
+                (getattr(o, "match_key", None) or ""): o
+                for o in (q.options or [])
+                if (getattr(o, "match_side", None) or "").lower() == "right"
+            }
+            selected_opts = []
+            correct_opts = []
+            for left in lefts:
+                rid = (match_map or {}).get(str(left.id))
+                if rid and rid in rights:
+                    selected_opts.append({"id": left.id, "label": f"{left.label} → {rights[rid].label}"})
+                expected = rights_by_key.get(getattr(left, "match_key", None) or "")
+                if expected:
+                    correct_opts.append({"id": left.id, "label": f"{left.label} → {expected.label}"})
+        else:
+            correct_opts = [{"id": o.id, "label": o.label} for o in (q.options or []) if o.is_correct]
+            selected_opts = [{"id": o.id, "label": o.label} for o in (q.options or []) if o.id in set(selected)]
         review.append({
             "question_id": q.id,
             "prompt": q.prompt,
@@ -3525,8 +3871,8 @@ async def submit_quiz(
             "points": q_points,
             "points_awarded": pts,
             "is_correct": ok,
-            "selected_options": [{"id": o.id, "label": o.label} for o in selected_opts],
-            "correct_options": [{"id": o.id, "label": o.label} for o in correct_opts],
+            "selected_options": selected_opts,
+            "correct_options": correct_opts,
         })
 
     percent = 0 if total_points == 0 else round((earned / total_points) * 100)
@@ -3590,6 +3936,55 @@ async def submit_quiz(
     }
 
 
+def _build_attempt_answer_rows(questions: List[models.QuizQuestion], attempt: models.QuizAttempt) -> list:
+    q_map = {q.id: q for q in questions}
+    answer_rows = []
+    for ans in attempt.answers or []:
+        try:
+            raw = json.loads(ans.selected_option_ids or "[]")
+        except Exception:
+            raw = []
+        q = q_map.get(ans.question_id)
+        if not q:
+            continue
+        if q.question_type == "matching" and isinstance(raw, dict):
+            lefts = [o for o in (q.options or []) if (getattr(o, "match_side", None) or "").lower() == "left"]
+            rights = {o.id: o for o in (q.options or []) if (getattr(o, "match_side", None) or "").lower() == "right"}
+            rights_by_key = {
+                (getattr(o, "match_key", None) or ""): o
+                for o in (q.options or [])
+                if (getattr(o, "match_side", None) or "").lower() == "right"
+            }
+            selected_opts = []
+            correct_opts = []
+            for left in lefts:
+                rid = raw.get(str(left.id))
+                try:
+                    rid_int = int(rid) if rid is not None else None
+                except (TypeError, ValueError):
+                    rid_int = None
+                if rid_int and rid_int in rights:
+                    selected_opts.append({"id": left.id, "label": f"{left.label} → {rights[rid_int].label}"})
+                expected = rights_by_key.get(getattr(left, "match_key", None) or "")
+                if expected:
+                    correct_opts.append({"id": left.id, "label": f"{left.label} → {expected.label}"})
+        else:
+            selected_ids = raw if isinstance(raw, list) else []
+            selected_opts = [{"id": o.id, "label": o.label} for o in (q.options or []) if o.id in set(selected_ids)]
+            correct_opts = [{"id": o.id, "label": o.label} for o in (q.options or []) if o.is_correct]
+        answer_rows.append({
+            "question_id": q.id,
+            "prompt": q.prompt,
+            "question_type": q.question_type,
+            "is_correct": ans.is_correct,
+            "points_awarded": ans.points_awarded,
+            "points": q.points or 1,
+            "selected_options": selected_opts,
+            "correct_options": correct_opts,
+        })
+    return answer_rows
+
+
 @app.get("/api/v1/quiz-attempts/{attempt_id}")
 async def get_quiz_attempt_detail(
     attempt_id: int,
@@ -3605,43 +4000,37 @@ async def get_quiz_attempt_detail(
     if not attempt:
         raise HTTPException(status_code=404, detail="Attempt not found")
 
-    item, _module, course = await _get_quiz_item_with_course(attempt.content_item_id, db)
     is_owner = attempt.user_id == current_user.id
-    is_staff = _can_manage_course(current_user, course)
-    if not is_owner and not is_staff:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    quiz_title = "Quiz"
+    content_item_id = attempt.content_item_id
+    bank_quiz_id = attempt.quiz_id
 
-    questions = await _load_quiz_questions(item.id, db)
-    q_map = {q.id: q for q in questions}
-    answer_rows = []
-    for ans in attempt.answers or []:
-        try:
-            selected_ids = json.loads(ans.selected_option_ids or "[]")
-        except Exception:
-            selected_ids = []
-        q = q_map.get(ans.question_id)
-        if not q:
-            continue
-        selected_opts = [o for o in (q.options or []) if o.id in set(selected_ids)]
-        correct_opts = [o for o in (q.options or []) if o.is_correct]
-        answer_rows.append({
-            "question_id": q.id,
-            "prompt": q.prompt,
-            "question_type": q.question_type,
-            "is_correct": ans.is_correct,
-            "points_awarded": ans.points_awarded,
-            "points": q.points or 1,
-            "selected_options": [{"id": o.id, "label": o.label} for o in selected_opts],
-            "correct_options": [{"id": o.id, "label": o.label} for o in correct_opts],
-        })
+    if attempt.quiz_id:
+        quiz = await _get_bank_quiz_or_404(attempt.quiz_id, db)
+        quiz_title = quiz.title
+        if not is_owner and not _is_staff(current_user):
+            raise HTTPException(status_code=403, detail="Not authorized")
+        questions = await _load_bank_quiz_questions(quiz.id, db)
+    elif attempt.content_item_id:
+        item, _module, course = await _get_quiz_item_with_course(attempt.content_item_id, db)
+        quiz_title = item.title
+        is_staff = _can_manage_course(current_user, course)
+        if not is_owner and not is_staff:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        questions = await _load_quiz_questions(item.id, db)
+    else:
+        raise HTTPException(status_code=400, detail="Attempt is not linked to a quiz")
+
+    answer_rows = _build_attempt_answer_rows(questions, attempt)
 
     student_res = await db.execute(select(models.User).where(models.User.id == attempt.user_id))
     student = student_res.scalars().first()
 
     return {
         "id": attempt.id,
-        "content_item_id": attempt.content_item_id,
-        "quiz_title": item.title,
+        "content_item_id": content_item_id,
+        "quiz_id": bank_quiz_id,
+        "quiz_title": quiz_title,
         "score": attempt.score,
         "max_score": attempt.max_score,
         "percent": attempt.percent,
@@ -3753,6 +4142,695 @@ async def list_instructor_quiz_courses(
         {"id": row[0], "title": row[1], "is_published": bool(row[2])}
         for row in res.all()
     ]
+
+
+# --- Standalone quiz bank ---
+
+@app.get("/api/v1/quizzes")
+async def list_bank_quizzes(
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    q = select(models.Quiz).order_by(models.Quiz.created_at.desc(), models.Quiz.id.desc())
+    if current_user.role != "admin" and not is_super_admin_email(current_user.email):
+        q = q.where(models.Quiz.creator_id == current_user.id)
+    res = await db.execute(q)
+    quizzes = list(res.scalars().all())
+    return [await _serialize_bank_quiz(quiz, db) for quiz in quizzes]
+
+
+@app.post("/api/v1/quizzes")
+async def create_bank_quiz(
+    body: BankQuizCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    title = (body.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+    quiz = models.Quiz(
+        title=title,
+        description=(body.description or "").strip() or None,
+        image_url=(body.image_url or "").strip() or None,
+        pass_percent=max(0, min(100, int(body.pass_percent if body.pass_percent is not None else 70))),
+        duration=body.duration,
+        max_attempts=_normalize_max_attempts(body.max_attempts),
+        is_published=bool(body.is_published),
+        creator_id=current_user.id,
+        created_at=datetime.utcnow(),
+    )
+    db.add(quiz)
+    await db.flush()
+    if body.course_ids:
+        await _set_quiz_assignments(db, quiz.id, body.course_ids)
+    await db.commit()
+    quiz = await _get_bank_quiz_or_404(quiz.id, db)
+    return await _serialize_bank_quiz(quiz, db, include_questions=True)
+
+
+@app.get("/api/v1/quizzes/available")
+async def list_available_bank_quizzes(
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Published standalone quizzes for logged-in students (and staff preview)."""
+    res = await db.execute(
+        select(models.Quiz)
+        .where(models.Quiz.is_published == True)  # noqa: E712
+        .order_by(models.Quiz.title.asc())
+    )
+    quizzes = list(res.scalars().all())
+    out = []
+    for quiz in quizzes:
+        payload = await _serialize_bank_quiz(quiz, db)
+        stats = await _bank_quiz_attempt_stats(quiz, current_user.id, db)
+        payload["attempt_count"] = stats["attempt_count"]
+        payload["best_percent"] = stats["best_percent"]
+        payload["passed"] = stats["passed"]
+        payload["max_attempts"] = stats["max_attempts"]
+        payload["attempts_remaining"] = stats["attempts_remaining"]
+        payload["can_attempt"] = stats["can_attempt"]
+        out.append(payload)
+    return out
+
+
+@app.get("/api/v1/quizzes/template.xlsx")
+async def download_quiz_excel_template(
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    rows = [
+        {
+            "question_type": "single",
+            "prompt": "What is 2+2?",
+            "points": 1,
+            "option_a": "3",
+            "option_b": "4",
+            "option_c": "5",
+            "option_d": "",
+            "correct": "B",
+            "match_left": "",
+            "match_right": "",
+        },
+        {
+            "question_type": "multi",
+            "prompt": "Select prime numbers",
+            "points": 1,
+            "option_a": "2",
+            "option_b": "4",
+            "option_c": "3",
+            "option_d": "9",
+            "correct": "A,C",
+            "match_left": "",
+            "match_right": "",
+        },
+        {
+            "question_type": "true_false",
+            "prompt": "The sky is blue.",
+            "points": 1,
+            "option_a": "",
+            "option_b": "",
+            "option_c": "",
+            "option_d": "",
+            "correct": "True",
+            "match_left": "",
+            "match_right": "",
+        },
+        {
+            "question_type": "matching",
+            "prompt": "Match countries to capitals",
+            "points": 2,
+            "option_a": "",
+            "option_b": "",
+            "option_c": "",
+            "option_d": "",
+            "correct": "",
+            "match_left": "France",
+            "match_right": "Paris",
+        },
+        {
+            "question_type": "matching",
+            "prompt": "Match countries to capitals",
+            "points": 2,
+            "option_a": "",
+            "option_b": "",
+            "option_c": "",
+            "option_d": "",
+            "correct": "",
+            "match_left": "Japan",
+            "match_right": "Tokyo",
+        },
+    ]
+    df = pd.DataFrame(rows)
+    instructions = pd.DataFrame(
+        [
+            {"field": "question_type", "how_to_fill": "single | multi | true_false | matching"},
+            {"field": "prompt", "how_to_fill": "Question text (required)"},
+            {"field": "points", "how_to_fill": "Points for this question (default 1)"},
+            {"field": "option_a..option_d", "how_to_fill": "Answer choices for single/multi"},
+            {"field": "correct", "how_to_fill": "For single: A or B. For multi: A,C. For true_false: True or False"},
+            {"field": "match_left / match_right", "how_to_fill": "For matching only. Same prompt on each pair row."},
+            {"field": "workflow", "how_to_fill": "1) Create quiz title  2) Upload this file  3) Publish quiz"},
+        ]
+    )
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Questions")
+        instructions.to_excel(writer, index=False, sheet_name="Instructions")
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="quiz_template.xlsx"'},
+    )
+
+
+@app.get("/api/v1/quizzes/{quiz_id}")
+async def get_bank_quiz(
+    quiz_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    quiz = await _get_bank_quiz_or_404(quiz_id, db)
+    if not _can_manage_bank_quiz(current_user, quiz) and current_user.role != "admin":
+        if not _is_staff(current_user):
+            raise HTTPException(status_code=403, detail="Not authorized")
+    return await _serialize_bank_quiz(quiz, db, include_questions=True, include_correct=True)
+
+
+@app.put("/api/v1/quizzes/{quiz_id}")
+async def update_bank_quiz(
+    quiz_id: int,
+    body: BankQuizUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    quiz = await _get_bank_quiz_or_404(quiz_id, db)
+    if not _can_manage_bank_quiz(current_user, quiz):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if body.title is not None:
+        title = body.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Title is required")
+        quiz.title = title
+    if body.description is not None:
+        quiz.description = body.description.strip() or None
+    if body.image_url is not None:
+        quiz.image_url = body.image_url.strip() or None
+    if body.pass_percent is not None:
+        quiz.pass_percent = max(0, min(100, int(body.pass_percent)))
+    if body.duration is not None:
+        quiz.duration = body.duration
+    update_data = body.model_dump(exclude_unset=True)
+    if "max_attempts" in update_data:
+        quiz.max_attempts = _normalize_max_attempts(update_data.get("max_attempts"))
+    if body.is_published is not None:
+        quiz.is_published = bool(body.is_published)
+    await db.commit()
+    quiz = await _get_bank_quiz_or_404(quiz_id, db)
+    return await _serialize_bank_quiz(quiz, db, include_questions=True)
+
+
+@app.delete("/api/v1/quizzes/{quiz_id}")
+async def delete_bank_quiz(
+    quiz_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    quiz = await _get_bank_quiz_or_404(quiz_id, db)
+    if not _can_manage_bank_quiz(current_user, quiz):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    questions = await _load_bank_quiz_questions(quiz_id, db)
+    q_ids = [q.id for q in questions]
+    attempt_res = await db.execute(select(models.QuizAttempt.id).where(models.QuizAttempt.quiz_id == quiz_id))
+    attempt_ids = list(attempt_res.scalars().all())
+    if attempt_ids:
+        await db.execute(delete(models.QuizAnswer).where(models.QuizAnswer.attempt_id.in_(attempt_ids)))
+        await db.execute(delete(models.QuizAttempt).where(models.QuizAttempt.id.in_(attempt_ids)))
+    if q_ids:
+        await db.execute(delete(models.QuizOption).where(models.QuizOption.question_id.in_(q_ids)))
+        await db.execute(delete(models.QuizQuestion).where(models.QuizQuestion.id.in_(q_ids)))
+    await db.execute(delete(models.QuizCourseAssignment).where(models.QuizCourseAssignment.quiz_id == quiz_id))
+    await db.execute(delete(models.Quiz).where(models.Quiz.id == quiz_id))
+    await db.commit()
+    return {"message": "Quiz deleted"}
+
+
+@app.put("/api/v1/quizzes/{quiz_id}/questions")
+async def put_bank_quiz_questions(
+    quiz_id: int,
+    body: QuizPutRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    quiz = await _get_bank_quiz_or_404(quiz_id, db)
+    if not _can_manage_bank_quiz(current_user, quiz):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if body.title is not None and body.title.strip():
+        quiz.title = body.title.strip()
+    if body.duration is not None:
+        quiz.duration = body.duration
+    if body.pass_percent is not None:
+        quiz.pass_percent = max(0, min(100, int(body.pass_percent)))
+    await _replace_questions_for_owner(db, body.questions or [], quiz_id=quiz.id)
+    await db.commit()
+    quiz = await _get_bank_quiz_or_404(quiz_id, db)
+    return await _serialize_bank_quiz(quiz, db, include_questions=True)
+
+
+@app.put("/api/v1/quizzes/{quiz_id}/assignments")
+async def put_bank_quiz_assignments(
+    quiz_id: int,
+    body: BankQuizAssignments,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    quiz = await _get_bank_quiz_or_404(quiz_id, db)
+    if not _can_manage_bank_quiz(current_user, quiz):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    await _set_quiz_assignments(db, quiz.id, body.course_ids or [])
+    await db.commit()
+    quiz = await _get_bank_quiz_or_404(quiz_id, db)
+    return await _serialize_bank_quiz(quiz, db)
+
+
+def _parse_quiz_excel_to_questions(contents: bytes, filename: str) -> List[QuizQuestionInput]:
+    try:
+        if filename.lower().endswith(".csv"):
+            df = pd.read_csv(io.BytesIO(contents))
+        else:
+            df = pd.read_excel(io.BytesIO(contents))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid file format: {e}")
+    df.columns = [str(c).lower().strip().replace(" ", "_") for c in df.columns]
+    required = {"question_type", "prompt"}
+    if not required.issubset(set(df.columns)):
+        raise HTTPException(status_code=400, detail="Template must include question_type and prompt columns")
+
+    def cell(row, key, default=""):
+        if key not in row or pd.isna(row[key]):
+            return default
+        return str(row[key]).strip()
+
+    matching_groups: Dict[str, dict] = {}
+    questions: List[QuizQuestionInput] = []
+    letter_map = {"a": 0, "b": 1, "c": 2, "d": 3, "e": 4, "f": 5}
+
+    for _, row in df.iterrows():
+        qtype = cell(row, "question_type", "single").lower().replace("-", "_").replace(" ", "_")
+        if qtype in ("truefalse", "true_or_false"):
+            qtype = "true_false"
+        if qtype in ("mcq", "multiple_choice"):
+            qtype = "single"
+        if qtype in ("multiple", "multi_select"):
+            qtype = "multi"
+        prompt = cell(row, "prompt")
+        if not prompt:
+            continue
+        try:
+            points = int(float(cell(row, "points", "1") or "1"))
+        except ValueError:
+            points = 1
+        points = max(1, points)
+
+        if qtype == "matching":
+            left = cell(row, "match_left")
+            right = cell(row, "match_right")
+            if not left or not right:
+                continue
+            group = matching_groups.setdefault(prompt, {"points": points, "pairs": []})
+            group["points"] = points
+            group["pairs"].append((left, right))
+            continue
+
+        options = []
+        for letter in ("a", "b", "c", "d", "e", "f"):
+            label = cell(row, f"option_{letter}")
+            if label:
+                options.append({"label": label, "is_correct": False, "order": len(options)})
+
+        correct_raw = cell(row, "correct")
+        if qtype == "true_false":
+            if len(options) < 2:
+                options = [
+                    {"label": "True", "is_correct": False, "order": 0},
+                    {"label": "False", "is_correct": False, "order": 1},
+                ]
+            truth = correct_raw.lower() in ("true", "t", "yes", "1", "a")
+            for o in options:
+                o["is_correct"] = (o["label"].lower() == "true") if truth else (o["label"].lower() == "false")
+            if not any(o["is_correct"] for o in options):
+                options[0]["is_correct"] = truth
+                options[1]["is_correct"] = not truth
+        else:
+            correct_letters = [p.strip().lower() for p in re.split(r"[,/;|\s]+", correct_raw) if p.strip()]
+            for letter in correct_letters:
+                idx = letter_map.get(letter)
+                if idx is not None and idx < len(options):
+                    options[idx]["is_correct"] = True
+                else:
+                    # allow matching by option text
+                    for o in options:
+                        if o["label"].lower() == letter:
+                            o["is_correct"] = True
+
+        questions.append(
+            QuizQuestionInput(
+                prompt=prompt,
+                question_type=qtype if qtype in VALID_QUIZ_TYPES else "single",
+                points=points,
+                options=[
+                    QuizOptionInput(label=o["label"], is_correct=o["is_correct"], order=o["order"])
+                    for o in options
+                ],
+            )
+        )
+
+    for prompt, group in matching_groups.items():
+        opts = []
+        for i, (left, right) in enumerate(group["pairs"]):
+            key = f"p{i+1}"
+            opts.append(QuizOptionInput(label=left, match_side="left", match_key=key, order=i * 2))
+            opts.append(QuizOptionInput(label=right, match_side="right", match_key=key, order=i * 2 + 1))
+        questions.append(
+            QuizQuestionInput(
+                prompt=prompt,
+                question_type="matching",
+                points=group["points"],
+                options=opts,
+            )
+        )
+
+    if not questions:
+        raise HTTPException(status_code=400, detail="No valid questions found in file")
+    return questions
+
+
+@app.post("/api/v1/quizzes/{quiz_id}/import-excel")
+async def import_bank_quiz_excel(
+    quiz_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    quiz = await _get_bank_quiz_or_404(quiz_id, db)
+    if not _can_manage_bank_quiz(current_user, quiz):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    contents = await file.read()
+    questions = _parse_quiz_excel_to_questions(contents, file.filename or "quiz.xlsx")
+    await _replace_questions_for_owner(db, questions, quiz_id=quiz.id)
+    await db.commit()
+    quiz = await _get_bank_quiz_or_404(quiz_id, db)
+    return await _serialize_bank_quiz(quiz, db, include_questions=True)
+
+
+@app.get("/api/v1/courses/{course_id}/assigned-quizzes")
+async def list_course_assigned_quizzes(
+    course_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    course_res = await db.execute(select(models.Course).where(models.Course.id == course_id))
+    course = course_res.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    await _ensure_enrolled_or_staff(current_user, course_id, db)
+    res = await db.execute(
+        select(models.Quiz)
+        .join(models.QuizCourseAssignment, models.QuizCourseAssignment.quiz_id == models.Quiz.id)
+        .where(
+            models.QuizCourseAssignment.course_id == course_id,
+            models.Quiz.is_published == True,  # noqa: E712
+        )
+        .order_by(models.Quiz.title.asc())
+    )
+    quizzes = list(res.scalars().all())
+    # Staff can also see unpublished assigned quizzes
+    if _is_staff(current_user):
+        res2 = await db.execute(
+            select(models.Quiz)
+            .join(models.QuizCourseAssignment, models.QuizCourseAssignment.quiz_id == models.Quiz.id)
+            .where(models.QuizCourseAssignment.course_id == course_id)
+            .order_by(models.Quiz.title.asc())
+        )
+        quizzes = list(res2.scalars().all())
+    out = []
+    for quiz in quizzes:
+        payload = await _serialize_bank_quiz(quiz, db)
+        stats = await _bank_quiz_attempt_stats(quiz, current_user.id, db)
+        payload["attempt_count"] = stats["attempt_count"]
+        payload["best_percent"] = stats["best_percent"]
+        payload["passed"] = stats["passed"]
+        payload["max_attempts"] = stats["max_attempts"]
+        payload["attempts_remaining"] = stats["attempts_remaining"]
+        payload["can_attempt"] = stats["can_attempt"]
+        out.append(payload)
+    return out
+
+
+async def _bank_quiz_attempt_stats(quiz: models.Quiz, user_id: int, db: AsyncSession) -> dict:
+    res = await db.execute(
+        select(models.QuizAttempt)
+        .where(models.QuizAttempt.quiz_id == quiz.id, models.QuizAttempt.user_id == user_id)
+        .order_by(models.QuizAttempt.submitted_at.desc(), models.QuizAttempt.id.desc())
+    )
+    attempts = list(res.scalars().all())
+    best = max((a.percent or 0 for a in attempts), default=None)
+    pass_pct = quiz.pass_percent if quiz.pass_percent is not None else 70
+    max_attempts = getattr(quiz, "max_attempts", None)
+    max_attempts = int(max_attempts) if max_attempts and int(max_attempts) > 0 else None
+    attempt_count = len(attempts)
+    remaining = None if max_attempts is None else max(0, max_attempts - attempt_count)
+    return {
+        "pass_percent": pass_pct,
+        "attempt_count": attempt_count,
+        "best_percent": best,
+        "passed": best is not None and best >= pass_pct,
+        "max_attempts": max_attempts,
+        "attempts_remaining": remaining,
+        "can_attempt": remaining is None or remaining > 0,
+        "attempts": attempts,
+    }
+
+
+@app.get("/api/v1/quizzes/{quiz_id}/take")
+async def take_bank_quiz(
+    quiz_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    quiz = await _get_bank_quiz_or_404(quiz_id, db)
+    if not quiz.is_published and not _is_staff(current_user):
+        raise HTTPException(status_code=403, detail="Quiz is not published")
+    questions = await _load_bank_quiz_questions(quiz_id, db)
+    stats = await _bank_quiz_attempt_stats(quiz, current_user.id, db)
+    max_attempts = stats["max_attempts"]
+    return {
+        "quiz_id": quiz.id,
+        "title": quiz.title,
+        "description": quiz.description,
+        "duration": quiz.duration,
+        "pass_percent": quiz.pass_percent if quiz.pass_percent is not None else 70,
+        "max_attempts": max_attempts,
+        "attempt_count": stats["attempt_count"],
+        "attempts_remaining": stats["attempts_remaining"],
+        "can_attempt": stats["can_attempt"],
+        "question_count": len(questions),
+        "questions": [_serialize_quiz_question(q, include_correct=False) for q in questions],
+    }
+
+
+@app.get("/api/v1/quizzes/{quiz_id}/my-attempts")
+async def my_bank_quiz_attempts(
+    quiz_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    quiz = await _get_bank_quiz_or_404(quiz_id, db)
+    if not quiz.is_published and not _is_staff(current_user):
+        raise HTTPException(status_code=403, detail="Quiz is not published")
+    stats = await _bank_quiz_attempt_stats(quiz, current_user.id, db)
+    attempts = stats.pop("attempts")
+    return {
+        "quiz_id": quiz.id,
+        **stats,
+        "attempts": [
+            {
+                "id": a.id,
+                "score": a.score,
+                "max_score": a.max_score,
+                "percent": a.percent,
+                "submitted_at": a.submitted_at.isoformat() if a.submitted_at else None,
+            }
+            for a in attempts
+        ],
+    }
+
+
+@app.post("/api/v1/quizzes/{quiz_id}/submit")
+async def submit_bank_quiz(
+    quiz_id: int,
+    body: QuizSubmitRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    quiz = await _get_bank_quiz_or_404(quiz_id, db)
+    if not quiz.is_published and not _is_staff(current_user):
+        raise HTTPException(status_code=403, detail="Quiz is not published")
+    stats = await _bank_quiz_attempt_stats(quiz, current_user.id, db)
+    if not stats["can_attempt"] and not _is_staff(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Maximum attempts reached ({stats['max_attempts']}).",
+        )
+    questions = await _load_bank_quiz_questions(quiz_id, db)
+    if not questions:
+        raise HTTPException(status_code=400, detail="This quiz has no questions yet")
+
+    answer_by_q = {a.question_id: a for a in (body.answers or [])}
+    total_points = 0
+    earned = 0
+    review = []
+
+    attempt = models.QuizAttempt(
+        quiz_id=quiz.id,
+        content_item_id=None,
+        user_id=current_user.id,
+        score=0,
+        max_score=0,
+        percent=0,
+        started_at=datetime.utcnow(),
+        submitted_at=datetime.utcnow(),
+    )
+    db.add(attempt)
+    await db.flush()
+
+    for q in questions:
+        ans = answer_by_q.get(q.id)
+        selected = list(ans.selected_option_ids or []) if ans else []
+        match_map = dict(ans.match_map or {}) if ans and ans.match_map else None
+        valid_ids = {o.id for o in (q.options or [])}
+        selected = [sid for sid in selected if sid in valid_ids]
+        if match_map:
+            match_map = {str(k): int(v) for k, v in match_map.items() if int(v) in valid_ids}
+        ok, pts = _grade_selection(q, selected, match_map)
+        q_points = q.points or 1
+        total_points += q_points
+        earned += pts
+        stored = json.dumps(match_map) if q.question_type == "matching" else json.dumps(selected)
+        db.add(
+            models.QuizAnswer(
+                attempt_id=attempt.id,
+                question_id=q.id,
+                selected_option_ids=stored,
+                is_correct=ok,
+                points_awarded=pts,
+            )
+        )
+        if q.question_type == "matching":
+            lefts = [o for o in (q.options or []) if (getattr(o, "match_side", None) or "").lower() == "left"]
+            rights = {o.id: o for o in (q.options or []) if (getattr(o, "match_side", None) or "").lower() == "right"}
+            rights_by_key = {
+                (getattr(o, "match_key", None) or ""): o
+                for o in (q.options or [])
+                if (getattr(o, "match_side", None) or "").lower() == "right"
+            }
+            selected_opts = []
+            correct_opts = []
+            for left in lefts:
+                rid = (match_map or {}).get(str(left.id))
+                if rid and rid in rights:
+                    selected_opts.append({"id": left.id, "label": f"{left.label} → {rights[rid].label}"})
+                expected = rights_by_key.get(getattr(left, "match_key", None) or "")
+                if expected:
+                    correct_opts.append({"id": left.id, "label": f"{left.label} → {expected.label}"})
+        else:
+            correct_opts = [{"id": o.id, "label": o.label} for o in (q.options or []) if o.is_correct]
+            selected_opts = [{"id": o.id, "label": o.label} for o in (q.options or []) if o.id in set(selected)]
+        review.append({
+            "question_id": q.id,
+            "prompt": q.prompt,
+            "question_type": q.question_type,
+            "points": q_points,
+            "points_awarded": pts,
+            "is_correct": ok,
+            "selected_options": selected_opts,
+            "correct_options": correct_opts,
+        })
+
+    percent = 0 if total_points == 0 else round((earned / total_points) * 100)
+    attempt.score = earned
+    attempt.max_score = total_points
+    attempt.percent = percent
+    pass_pct = quiz.pass_percent if quiz.pass_percent is not None else 70
+
+    prior = await db.execute(
+        select(models.QuizAttempt.percent).where(
+            models.QuizAttempt.quiz_id == quiz.id,
+            models.QuizAttempt.user_id == current_user.id,
+            models.QuizAttempt.id != attempt.id,
+        )
+    )
+    prior_percents = list(prior.scalars().all())
+    best_percent = max([percent] + [p or 0 for p in prior_percents])
+    await db.commit()
+
+    return {
+        "attempt_id": attempt.id,
+        "quiz_id": quiz.id,
+        "score": earned,
+        "max_score": total_points,
+        "percent": percent,
+        "best_percent": best_percent,
+        "pass_percent": pass_pct,
+        "passed": percent >= pass_pct,
+        "lesson_completed": False,
+        "review": review,
+    }
+
+
+@app.get("/api/v1/quizzes/{quiz_id}/responses")
+async def bank_quiz_responses(
+    quiz_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_instructor_or_admin),
+):
+    quiz = await _get_bank_quiz_or_404(quiz_id, db)
+    if not _can_manage_bank_quiz(current_user, quiz) and not _is_staff(current_user):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    att_res = await db.execute(
+        select(models.QuizAttempt, models.User)
+        .join(models.User, models.QuizAttempt.user_id == models.User.id)
+        .where(models.QuizAttempt.quiz_id == quiz_id)
+        .order_by(models.QuizAttempt.submitted_at.desc())
+    )
+    attempts = []
+    for attempt, user in att_res.all():
+        attempts.append({
+            "id": attempt.id,
+            "score": attempt.score,
+            "max_score": attempt.max_score,
+            "percent": attempt.percent,
+            "submitted_at": attempt.submitted_at.isoformat() if attempt.submitted_at else None,
+            "student_id": user.id,
+            "student_name": user.full_name,
+            "student_email": user.email,
+        })
+    chron = sorted(attempts, key=lambda a: (a.get("submitted_at") or "", a["id"]))
+    counters: Dict[int, int] = {}
+    numbered = {}
+    for a in chron:
+        sid = a["student_id"]
+        counters[sid] = counters.get(sid, 0) + 1
+        numbered[a["id"]] = counters[sid]
+    for a in attempts:
+        a["attempt_number"] = numbered.get(a["id"], 1)
+    return {
+        "quiz_id": quiz.id,
+        "title": quiz.title,
+        "pass_percent": quiz.pass_percent if quiz.pass_percent is not None else 70,
+        "attempt_count": len(attempts),
+        "attempts": attempts,
+    }
 
 
 # 2. Final Course Completion (The "Complete Course" Button)

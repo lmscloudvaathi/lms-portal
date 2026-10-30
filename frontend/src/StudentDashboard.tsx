@@ -8,7 +8,7 @@ import {
     LayoutDashboard, BookOpen, Compass, Award, LogOut,
     CheckCircle, AlertTriangle, X,
     Code, Play, Monitor, ChevronRight, Cloud, Flag,
-    Menu, Sparkles, User, PlayCircle, Lock, BellRing, Trash2, Download, Clock, ExternalLink
+    Menu, Sparkles, User, PlayCircle, Lock, BellRing, Trash2, Download, Clock, ExternalLink, HelpCircle
 } from "lucide-react";
 import { motion } from "framer-motion";
 
@@ -319,6 +319,21 @@ const StudentDashboard = () => {
 
     const [availableCourses, setAvailableCourses] = useState<Course[]>([]);
     const [enrolledCourses, setEnrolledCourses] = useState<Course[]>([]);
+    const [availableQuizzes, setAvailableQuizzes] = useState<Array<{
+        id: number;
+        title: string;
+        description?: string | null;
+        image_url?: string | null;
+        pass_percent: number;
+        question_count: number;
+        duration?: number | null;
+        max_attempts?: number | null;
+        attempt_count?: number;
+        attempts_remaining?: number | null;
+        can_attempt?: boolean;
+        best_percent?: number | null;
+        passed?: boolean;
+    }>>([]);
     const [loading, setLoading] = useState(true);
     const [progressMap, setProgressMap] = useState<{ [key: number]: { percent: number, completed: number, total: number } }>({});
     const [notifications, setNotifications] = useState<any[]>([]);
@@ -461,9 +476,10 @@ const StudentDashboard = () => {
 
             const config = { headers: { Authorization: `Bearer ${token}` } };
 
-            const [allRes, myRes] = await Promise.all([
+            const [allRes, myRes, quizRes] = await Promise.all([
                 axios.get(`${API_BASE_URL}/courses`, config),
-                axios.get(`${API_BASE_URL}/my-courses`, config)
+                axios.get(`${API_BASE_URL}/my-courses`, config),
+                axios.get(`${API_BASE_URL}/quizzes/available`, config).catch(() => ({ data: [] })),
             ]);
 
             // SAFETY CHECK: Ensure we have arrays
@@ -473,6 +489,7 @@ const StudentDashboard = () => {
             const myCourseIds = new Set(myData.map((c: any) => c.id));
             setAvailableCourses(allData.filter((c: any) => !myCourseIds.has(c.id)));
             setEnrolledCourses(myData);
+            setAvailableQuizzes(Array.isArray(quizRes.data) ? quizRes.data : []);
         } catch (err: any) {
             if (err.response?.status === 401) { clearSession(); navigate("/"); }
         } finally {
@@ -1424,12 +1441,16 @@ const StudentDashboard = () => {
                 <div className="mb-8">
                     <h2 className="text-3xl font-extrabold text-slate-800">
                         {activeTab === "learning" && "My Learning"}
-                        {activeTab === "explore" && "Explore Courses"}
+                        {activeTab === "explore" && "Explore"}
                         {activeTab === "certificates" && "My Achievements"}
                         {activeTab === "notifications" && "Notifications"}
                         {activeTab === "settings" && "Account Settings"}
                     </h2>
-                    <p className="text-slate-500 font-medium">Welcome to your student portal</p>
+                    <p className="text-slate-500 font-medium">
+                        {activeTab === "explore"
+                            ? "Browse courses and take available quizzes"
+                            : "Welcome to your student portal"}
+                    </p>
                 </div>
 
                 {/* --- CONTENT SECTIONS --- */}
@@ -1527,57 +1548,114 @@ const StudentDashboard = () => {
 
                 {/* EXPLORE TAB */}
                 {activeTab === "explore" && (
-                    <div className="space-y-8">
-                        <div>
-                            <p className="text-slate-500 text-sm mb-4">Browse by category to find the right course faster.</p>
-                            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-thin">
-                                <button
-                                    onClick={() => setExploreCategory("all")}
-                                    className={`shrink-0 px-4 py-2 rounded-full text-sm font-bold border transition-all ${exploreCategory === "all"
-                                        ? "bg-[#005EB8] text-white border-[#005EB8] shadow-sm"
-                                        : "bg-white text-slate-600 border-slate-200 hover:border-[#005EB8] hover:text-[#005EB8]"
-                                        }`}
-                                >
-                                    All ({availableCourses.length})
-                                </button>
-                                {exploreGroups.map((group) => (
+                    <div className="space-y-10">
+                        {availableQuizzes.length > 0 && (
+                            <section>
+                                <div className="mb-4 flex items-center justify-between">
+                                    <h3 className="flex items-center gap-2 text-lg font-extrabold text-slate-800">
+                                        <HelpCircle size={18} className="text-[#005EB8]" /> Quizzes
+                                    </h3>
+                                    <span className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                                        {availableQuizzes.length} quiz{availableQuizzes.length === 1 ? "" : "zes"}
+                                    </span>
+                                </div>
+                                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                                    {availableQuizzes.map((quiz) => (
+                                        <div key={quiz.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                                            <div className="aspect-video bg-slate-100">
+                                                {quiz.image_url ? (
+                                                    <img src={resolveMediaUrl(quiz.image_url)} alt="" className="h-full w-full object-cover" />
+                                                ) : (
+                                                    <div className="flex h-full items-center justify-center text-slate-300">
+                                                        <HelpCircle size={32} />
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="p-5">
+                                                <h4 className="font-bold text-slate-800">{quiz.title}</h4>
+                                                <p className="mt-1 line-clamp-2 text-sm text-slate-500">
+                                                    {quiz.description || "Standalone quiz"}
+                                                </p>
+                                                <p className="mb-4 mt-3 text-xs font-semibold text-slate-400">
+                                                    {quiz.question_count} question{quiz.question_count === 1 ? "" : "s"} · Pass {quiz.pass_percent}%
+                                                    {quiz.best_percent != null ? ` · Best ${quiz.best_percent}%` : ""}
+                                                    {" · "}
+                                                    {quiz.max_attempts == null
+                                                        ? "Unlimited attempts"
+                                                        : `${quiz.attempts_remaining ?? Math.max(0, (quiz.max_attempts || 0) - (quiz.attempt_count || 0))} / ${quiz.max_attempts} left`}
+                                                </p>
+                                                <button
+                                                    type="button"
+                                                    disabled={quiz.can_attempt === false}
+                                                    onClick={() => navigate(`/quiz/${quiz.id}`)}
+                                                    className="w-full rounded-xl bg-[#005EB8] py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    {quiz.can_attempt === false
+                                                        ? "Attempts used up"
+                                                        : quiz.attempt_count
+                                                          ? "Retake quiz"
+                                                          : "Start quiz"}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </section>
+                        )}
+
+                        <section className="space-y-8">
+                            <div>
+                                <h3 className="mb-1 text-lg font-extrabold text-slate-800">Courses</h3>
+                                <p className="mb-4 text-sm text-slate-500">Browse by category to find the right course faster.</p>
+                                <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-thin">
                                     <button
-                                        key={group.id}
-                                        onClick={() => setExploreCategory(group.id)}
-                                        className={`shrink-0 px-4 py-2 rounded-full text-sm font-bold border transition-all ${exploreCategory === group.id
+                                        onClick={() => setExploreCategory("all")}
+                                        className={`shrink-0 px-4 py-2 rounded-full text-sm font-bold border transition-all ${exploreCategory === "all"
                                             ? "bg-[#005EB8] text-white border-[#005EB8] shadow-sm"
                                             : "bg-white text-slate-600 border-slate-200 hover:border-[#005EB8] hover:text-[#005EB8]"
                                             }`}
                                     >
-                                        {group.label} ({group.courses.length})
+                                        All ({availableCourses.length})
                                     </button>
-                                ))}
+                                    {exploreGroups.map((group) => (
+                                        <button
+                                            key={group.id}
+                                            onClick={() => setExploreCategory(group.id)}
+                                            className={`shrink-0 px-4 py-2 rounded-full text-sm font-bold border transition-all ${exploreCategory === group.id
+                                                ? "bg-[#005EB8] text-white border-[#005EB8] shadow-sm"
+                                                : "bg-white text-slate-600 border-slate-200 hover:border-[#005EB8] hover:text-[#005EB8]"
+                                                }`}
+                                        >
+                                            {group.label} ({group.courses.length})
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
-                        </div>
 
-                        {availableCourses.length === 0 ? (
-                            <div className="bg-white p-10 rounded-2xl border border-dashed border-slate-300 text-center text-slate-400">
-                                No courses available to explore yet.
-                            </div>
-                        ) : visibleExploreGroups.length === 0 ? (
-                            <div className="bg-white p-10 rounded-2xl border border-dashed border-slate-300 text-center text-slate-400">
-                                No courses in this category.
-                            </div>
-                        ) : (
-                            visibleExploreGroups.map((group) => (
-                                <section key={group.id}>
-                                    <div className="flex items-center justify-between mb-4">
-                                        <h3 className="text-lg font-extrabold text-slate-800">{group.label}</h3>
-                                        <span className="text-xs font-bold text-slate-400 uppercase tracking-wide">{group.courses.length} course{group.courses.length === 1 ? "" : "s"}</span>
-                                    </div>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                        {group.courses.map((c) => (
-                                            <CourseCard key={c.id} course={c} type="available" handleFreeEnroll={handleFreeEnroll} openEnrollModal={openEnrollModal} />
-                                        ))}
-                                    </div>
-                                </section>
-                            ))
-                        )}
+                            {availableCourses.length === 0 ? (
+                                <div className="bg-white p-10 rounded-2xl border border-dashed border-slate-300 text-center text-slate-400">
+                                    No courses available to explore yet.
+                                </div>
+                            ) : visibleExploreGroups.length === 0 ? (
+                                <div className="bg-white p-10 rounded-2xl border border-dashed border-slate-300 text-center text-slate-400">
+                                    No courses in this category.
+                                </div>
+                            ) : (
+                                visibleExploreGroups.map((group) => (
+                                    <section key={group.id}>
+                                        <div className="flex items-center justify-between mb-4">
+                                            <h3 className="text-lg font-extrabold text-slate-800">{group.label}</h3>
+                                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wide">{group.courses.length} course{group.courses.length === 1 ? "" : "s"}</span>
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                            {group.courses.map((c) => (
+                                                <CourseCard key={c.id} course={c} type="available" handleFreeEnroll={handleFreeEnroll} openEnrollModal={openEnrollModal} />
+                                            ))}
+                                        </div>
+                                    </section>
+                                ))
+                            )}
+                        </section>
                     </div>
                 )}
 
