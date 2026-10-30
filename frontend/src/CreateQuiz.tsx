@@ -8,6 +8,7 @@ import {
   Download,
   FileSpreadsheet,
   HelpCircle,
+  Loader2,
   Plus,
   Trash2,
   Upload,
@@ -272,6 +273,7 @@ const CreateQuiz = () => {
   const [courses, setCourses] = useState<CourseOpt[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -579,6 +581,7 @@ const CreateQuiz = () => {
       triggerToast("Open a created quiz first, then upload the template.", "error");
       return;
     }
+    setUploading(true);
     setSaving(true);
     try {
       const form = new FormData();
@@ -608,6 +611,7 @@ const CreateQuiz = () => {
       const detail = e?.response?.data?.detail;
       triggerToast(typeof detail === "string" ? detail : "Import failed.", "error");
     } finally {
+      setUploading(false);
       setSaving(false);
     }
   };
@@ -788,7 +792,14 @@ const CreateQuiz = () => {
           <MetaFields {...metaProps} showPublishToggle />
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="relative rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          {uploading && (
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-2xl bg-white/85 backdrop-blur-[1px]">
+              <Loader2 className="h-8 w-8 animate-spin text-[#005EB8]" />
+              <p className="text-sm font-semibold text-slate-700">Uploading template…</p>
+              <p className="text-xs text-slate-500">Parsing questions, please wait</p>
+            </div>
+          )}
           <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 className="flex items-center gap-2 text-lg font-bold text-slate-800">
@@ -801,21 +812,31 @@ const CreateQuiz = () => {
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
+                disabled={uploading}
                 onClick={() => void downloadTemplate()}
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-60"
               >
                 <Download size={16} /> Download template
               </button>
               <label
                 className={`inline-flex cursor-pointer items-center gap-2 rounded-xl bg-[#005EB8] px-4 py-2 text-sm font-bold text-white ${
-                  saving ? "pointer-events-none opacity-60" : ""
+                  uploading || saving ? "pointer-events-none opacity-60" : ""
                 }`}
               >
-                <Upload size={16} /> Upload Excel
+                {uploading ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" /> Uploading…
+                  </>
+                ) : (
+                  <>
+                    <Upload size={16} /> Upload Excel
+                  </>
+                )}
                 <input
                   type="file"
                   accept=".xlsx,.xls,.csv"
                   className="hidden"
+                  disabled={uploading}
                   onChange={(e) => {
                     const f = e.target.files?.[0] || null;
                     e.target.value = "";

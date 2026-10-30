@@ -415,49 +415,51 @@ const NativeQuizPlayer = ({ lessonId, quizId, lessonTitle, onBack, onCompleted }
     return (
       <div ref={shellRef} className="fixed inset-0 z-[200] flex flex-col bg-slate-50">
         {topBar}
-        <div className="flex flex-1 items-center justify-center overflow-y-auto px-5 py-8">
-          <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-            <p className="mb-1 text-xs font-bold uppercase tracking-wider text-[#005EB8]">Quiz instructions</p>
-            <h2 className="mb-2 text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">
+        <div className="flex flex-1 items-start justify-center overflow-y-auto px-3 py-3 sm:px-5 sm:py-4">
+          <div className="my-auto w-full max-w-lg rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <p className="mb-0.5 text-[10px] font-bold uppercase tracking-wider text-[#005EB8]">
+              Quiz instructions
+            </p>
+            <h2 className="mb-1.5 break-words text-base font-extrabold leading-snug tracking-tight text-slate-900 sm:text-lg">
               {topicTitle || lessonTitle}
             </h2>
             {description ? (
-              <p className="mb-6 whitespace-pre-wrap text-sm leading-relaxed text-slate-600">{description}</p>
+              <p className="mb-3 max-h-20 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-slate-600">
+                {description}
+              </p>
             ) : (
-              <p className="mb-6 text-sm text-slate-500">Read the rules below, then start when you are ready.</p>
+              <p className="mb-3 text-xs text-slate-500">Read the rules below, then start when you are ready.</p>
             )}
 
-            <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <div className="rounded-xl bg-slate-50 px-3 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Questions</p>
-                <p className="text-lg font-bold text-slate-800">{questions.length}</p>
+            <div className="mb-3 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+              <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">Questions</p>
+                <p className="text-sm font-bold text-slate-800">{questions.length}</p>
               </div>
-              <div className="rounded-xl bg-slate-50 px-3 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Pass mark</p>
-                <p className="text-lg font-bold text-slate-800">{passPercent}%</p>
+              <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">Pass mark</p>
+                <p className="text-sm font-bold text-slate-800">{passPercent}%</p>
               </div>
-              <div className="rounded-xl bg-slate-50 px-3 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Attempts</p>
-                <p className="text-lg font-bold text-slate-800">{maxAttempts == null ? "∞" : maxAttempts}</p>
+              <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">Attempts</p>
+                <p className="text-sm font-bold text-slate-800">{maxAttempts == null ? "∞" : maxAttempts}</p>
               </div>
-              <div className="rounded-xl bg-slate-50 px-3 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Best score</p>
-                <p className={`text-lg font-bold ${passedBefore ? "text-green-600" : "text-slate-800"}`}>
+              <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">Best score</p>
+                <p className={`text-sm font-bold ${passedBefore ? "text-green-600" : "text-slate-800"}`}>
                   {bestPercent == null ? "—" : `${bestPercent}%`}
                 </p>
               </div>
             </div>
 
-            <div className="mb-8 rounded-xl border border-slate-200 bg-white p-4">
-              <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Before you begin</p>
-              <ul className="list-disc space-y-1.5 pl-5 text-sm text-slate-600">
+            <div className="mb-3 rounded-lg border border-slate-200 bg-white p-2.5">
+              <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">Before you begin</p>
+              <ul className="list-disc space-y-0.5 pl-4 text-[11px] leading-snug text-slate-600">
                 <li>The quiz opens in fullscreen. Stay in fullscreen until you submit.</li>
                 <li>Use the question number grid to jump between questions.</li>
-                <li>
-                  Answered questions are marked green; unanswered stay blank. Review before submit.
-                </li>
-                <li>Leaving fullscreen or pressing Back requires confirmation (OK).</li>
-                <li>Your best score counts toward the pass mark ({passPercent}%).</li>
+                <li>Answered = green; unanswered = blank. Review before submit.</li>
+                <li>Leaving fullscreen or Back needs confirmation (OK).</li>
+                <li>Best score counts toward the pass mark ({passPercent}%).</li>
                 <li>
                   Attempts: <span className="font-semibold text-slate-800">{attemptLabel}</span>
                   {attemptCount > 0 ? ` · ${attemptCount} used` : null}
@@ -466,16 +468,16 @@ const NativeQuizPlayer = ({ lessonId, quizId, lessonTitle, onBack, onCompleted }
             </div>
 
             {questions.length === 0 ? (
-              <p className="text-sm text-slate-400">No questions yet.</p>
+              <p className="text-xs text-slate-400">No questions yet.</p>
             ) : !canAttempt ? (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
                 Maximum attempts reached. You cannot take this quiz again.
               </div>
             ) : (
               <button
                 type="button"
                 onClick={() => void startQuiz()}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#005EB8] py-3.5 text-base font-bold text-white transition hover:bg-blue-700"
+                className="inline-flex w-full items-center justify-center rounded-lg bg-[#005EB8] py-2 text-sm font-bold text-white transition hover:bg-blue-700"
               >
                 {attemptCount > 0 ? "Retake quiz" : "Start quiz"}
               </button>
