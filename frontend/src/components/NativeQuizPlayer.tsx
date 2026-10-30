@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import axios from "axios";
 import API_BASE_URL from "../config";
 import {
@@ -240,18 +239,23 @@ const NativeQuizPlayer = ({ lessonId, quizId, lessonTitle, onBack, onCompleted }
     const reason = exitModal;
     setExitModal(null);
     await exitFullscreen();
-    if (reason === "fullscreen" || reason === "back") {
+    if (reason === "back") {
+      onBack();
+      return;
+    }
+    if (reason === "fullscreen") {
       setPhase("start");
     }
   };
 
   const cancelExit = async () => {
     setExitModal(null);
-    if (phase === "taking") await enterFullscreen();
+    if (phaseRef.current === "taking") await enterFullscreen();
   };
 
   const requestLeave = () => {
     if (phase === "taking") {
+      // Keep modal inside the fullscreen shell (portals to body are invisible in FS)
       setExitModal("back");
       return;
     }
@@ -348,37 +352,34 @@ const NativeQuizPlayer = ({ lessonId, quizId, lessonTitle, onBack, onCompleted }
     </header>
   );
 
-  const exitDialog =
-    exitModal &&
-    createPortal(
-      <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4">
-        <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
-          <h3 className="text-lg font-bold text-slate-900">Leave quiz?</h3>
-          <p className="mt-2 text-sm text-slate-600">
-            {exitModal === "fullscreen"
-              ? "You left fullscreen. Click OK to exit the quiz attempt, or Cancel to continue in fullscreen."
-              : "Exiting will end this attempt screen. Your answers are not submitted until you press Submit."}
-          </p>
-          <div className="mt-6 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => void cancelExit()}
-              className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => void confirmExit()}
-              className="rounded-xl bg-[#005EB8] px-4 py-2 text-sm font-bold text-white"
-            >
-              OK
-            </button>
-          </div>
+  const exitDialog = exitModal ? (
+    <div className="absolute inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-sm rounded-xl bg-white p-4 shadow-xl">
+        <h3 className="text-sm font-bold text-slate-900">Leave quiz?</h3>
+        <p className="mt-1.5 text-xs leading-relaxed text-slate-600">
+          {exitModal === "fullscreen"
+            ? "You left fullscreen. Click OK to return to instructions, or Cancel to continue in fullscreen."
+            : "Your answers are not submitted until you press Submit. OK will exit the quiz."}
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => void cancelExit()}
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => void confirmExit()}
+            className="rounded-lg bg-[#005EB8] px-3 py-1.5 text-xs font-bold text-white"
+          >
+            OK
+          </button>
         </div>
-      </div>,
-      document.body
-    );
+      </div>
+    </div>
+  ) : null;
 
   if (phase === "loading") {
     return (
