@@ -118,6 +118,10 @@ class QuizQuestion(Base):
     question_type = Column(String(32), nullable=False, default="single")
     order = Column(Integer, default=0)
     points = Column(Integer, default=1)
+    # Shown to students only after submit (in results review); all optional
+    explanation = Column(Text, nullable=True)
+    justification = Column(Text, nullable=True)
+    justification_link = Column(Text, nullable=True)
 
     content_item = relationship("ContentItem", back_populates="quiz_questions")
     quiz = relationship("Quiz", back_populates="questions")

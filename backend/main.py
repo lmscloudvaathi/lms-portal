@@ -194,6 +194,9 @@ async def _ensure_quiz_columns(conn):
             "ALTER TABLE quiz_options ADD COLUMN match_key VARCHAR(64)",
             "ALTER TABLE quizzes ADD COLUMN image_url TEXT",
             "ALTER TABLE quizzes ADD COLUMN max_attempts INTEGER",
+            "ALTER TABLE quiz_questions ADD COLUMN explanation TEXT",
+            "ALTER TABLE quiz_questions ADD COLUMN justification TEXT",
+            "ALTER TABLE quiz_questions ADD COLUMN justification_link TEXT",
         )
         for stmt in stmts:
             try:
@@ -214,6 +217,9 @@ async def _ensure_quiz_columns(conn):
         "ALTER TABLE quiz_options ADD COLUMN IF NOT EXISTS match_key VARCHAR(64);",
         "ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS image_url TEXT;",
         "ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS max_attempts INTEGER;",
+        "ALTER TABLE quiz_questions ADD COLUMN IF NOT EXISTS explanation TEXT;",
+        "ALTER TABLE quiz_questions ADD COLUMN IF NOT EXISTS justification TEXT;",
+        "ALTER TABLE quiz_questions ADD COLUMN IF NOT EXISTS justification_link TEXT;",
         "ALTER TABLE quiz_questions MODIFY content_item_id INT NULL;",
         "ALTER TABLE quiz_attempts MODIFY content_item_id INT NULL;",
     )
@@ -435,6 +441,9 @@ class QuizQuestionInput(BaseModel):
     order: Optional[int] = 0
     options: List[QuizOptionInput] = []
     id: Optional[int] = None
+    explanation: Optional[str] = None
+    justification: Optional[str] = None
+    justification_link: Optional[str] = None
 
 
 class QuizPutRequest(BaseModel):
@@ -3354,6 +3363,9 @@ async def _clone_quiz_questions(db: AsyncSession, source_item_id: int, target_it
             question_type=q.question_type,
             order=q.order,
             points=q.points or 1,
+            explanation=getattr(q, "explanation", None),
+            justification=getattr(q, "justification", None),
+            justification_link=getattr(q, "justification_link", None),
         )
         db.add(nq)
         await db.flush()
@@ -3411,7 +3423,7 @@ def _serialize_quiz_question(q: models.QuizQuestion, include_correct: bool = Tru
             row["is_correct"] = bool(o.is_correct)
             row["match_key"] = getattr(o, "match_key", None)
         serialized_opts.append(row)
-    return {
+    payload = {
         "id": q.id,
         "prompt": q.prompt,
         "question_type": q.question_type,
@@ -3419,6 +3431,14 @@ def _serialize_quiz_question(q: models.QuizQuestion, include_correct: bool = Tru
         "points": q.points or 1,
         "options": serialized_opts,
     }
+    if include_correct:
+        expl = (getattr(q, "explanation", None) or "").strip() or None
+        just = (getattr(q, "justification", None) or "").strip() or None
+        jlink = (getattr(q, "justification_link", None) or "").strip() or None
+        payload["explanation"] = expl
+        payload["justification"] = just
+        payload["justification_link"] = jlink
+    return payload
 
 
 def _grade_matching(question: models.QuizQuestion, match_map: Optional[Dict[str, int]]) -> Tuple[bool, int]:
@@ -3646,6 +3666,9 @@ async def _replace_questions_for_owner(
         if not prompt:
             raise HTTPException(status_code=400, detail=f"Question {qi + 1} is missing a prompt")
         options_in = _normalize_question_options(qtype, q_in, qi)
+        expl = (q_in.explanation or "").strip() or None
+        just = (q_in.justification or "").strip() or None
+        jlink = (q_in.justification_link or "").strip() or None
         q = models.QuizQuestion(
             content_item_id=content_item_id,
             quiz_id=quiz_id,
@@ -3653,6 +3676,9 @@ async def _replace_questions_for_owner(
             question_type=qtype,
             order=q_in.order if q_in.order is not None else qi,
             points=max(1, int(q_in.points or 1)),
+            explanation=expl,
+            justification=just,
+            justification_link=jlink,
         )
         db.add(q)
         await db.flush()
@@ -3873,6 +3899,9 @@ async def submit_quiz(
             "is_correct": ok,
             "selected_options": selected_opts,
             "correct_options": correct_opts,
+            "explanation": (getattr(q, "explanation", None) or "").strip() or None,
+            "justification": (getattr(q, "justification", None) or "").strip() or None,
+            "justification_link": (getattr(q, "justification_link", None) or "").strip() or None,
         })
 
     percent = 0 if total_points == 0 else round((earned / total_points) * 100)
@@ -3981,6 +4010,9 @@ def _build_attempt_answer_rows(questions: List[models.QuizQuestion], attempt: mo
             "points": q.points or 1,
             "selected_options": selected_opts,
             "correct_options": correct_opts,
+            "explanation": (getattr(q, "explanation", None) or "").strip() or None,
+            "justification": (getattr(q, "justification", None) or "").strip() or None,
+            "justification_link": (getattr(q, "justification_link", None) or "").strip() or None,
         })
     return answer_rows
 
@@ -4230,6 +4262,9 @@ async def download_quiz_excel_template(
             "correct": "B",
             "match_left": "",
             "match_right": "",
+            "explanation": "Addition of two integers.",
+            "justification": "2 plus 2 equals 4, so option B is correct.",
+            "justification_link": "https://en.wikipedia.org/wiki/Addition",
         },
         {
             "question_type": "multi",
@@ -4242,6 +4277,9 @@ async def download_quiz_excel_template(
             "correct": "A,C",
             "match_left": "",
             "match_right": "",
+            "explanation": "",
+            "justification": "",
+            "justification_link": "",
         },
         {
             "question_type": "true_false",
@@ -4254,6 +4292,9 @@ async def download_quiz_excel_template(
             "correct": "True",
             "match_left": "",
             "match_right": "",
+            "explanation": "",
+            "justification": "",
+            "justification_link": "",
         },
         {
             "question_type": "matching",
@@ -4266,6 +4307,9 @@ async def download_quiz_excel_template(
             "correct": "",
             "match_left": "France",
             "match_right": "Paris",
+            "explanation": "Capitals are the main cities of countries.",
+            "justification": "Paris is the capital of France; Tokyo is the capital of Japan.",
+            "justification_link": "",
         },
         {
             "question_type": "matching",
@@ -4278,6 +4322,9 @@ async def download_quiz_excel_template(
             "correct": "",
             "match_left": "Japan",
             "match_right": "Tokyo",
+            "explanation": "",
+            "justification": "",
+            "justification_link": "",
         },
     ]
     df = pd.DataFrame(rows)
@@ -4289,6 +4336,9 @@ async def download_quiz_excel_template(
             {"field": "option_a..option_d", "how_to_fill": "Answer choices for single/multi"},
             {"field": "correct", "how_to_fill": "For single: A or B. For multi: A,C. For true_false: True or False"},
             {"field": "match_left / match_right", "how_to_fill": "For matching only. Same prompt on each pair row."},
+            {"field": "explanation", "how_to_fill": "Optional. Shown after submit (concept / teaching note). Leave blank if unused."},
+            {"field": "justification", "how_to_fill": "Optional. Shown after submit — why the correct answer is right. Leave blank if unused."},
+            {"field": "justification_link", "how_to_fill": "Optional URL (https://…) related to the justification. Leave blank if unused."},
             {"field": "workflow", "how_to_fill": "1) Create quiz title  2) Upload this file  3) Publish quiz"},
         ]
     )
@@ -4452,14 +4502,33 @@ def _parse_quiz_excel_to_questions(contents: bytes, filename: str) -> List[QuizQ
             points = 1
         points = max(1, points)
 
+        explanation = cell(row, "explanation") or None
+        justification = cell(row, "justification") or None
+        justification_link = cell(row, "justification_link") or None
+
         if qtype == "matching":
             left = cell(row, "match_left")
             right = cell(row, "match_right")
             if not left or not right:
                 continue
-            group = matching_groups.setdefault(prompt, {"points": points, "pairs": []})
+            group = matching_groups.setdefault(
+                prompt,
+                {
+                    "points": points,
+                    "pairs": [],
+                    "explanation": None,
+                    "justification": None,
+                    "justification_link": None,
+                },
+            )
             group["points"] = points
             group["pairs"].append((left, right))
+            if explanation and not group["explanation"]:
+                group["explanation"] = explanation
+            if justification and not group["justification"]:
+                group["justification"] = justification
+            if justification_link and not group["justification_link"]:
+                group["justification_link"] = justification_link
             continue
 
         options = []
@@ -4498,6 +4567,9 @@ def _parse_quiz_excel_to_questions(contents: bytes, filename: str) -> List[QuizQ
                 prompt=prompt,
                 question_type=qtype if qtype in VALID_QUIZ_TYPES else "single",
                 points=points,
+                explanation=explanation,
+                justification=justification,
+                justification_link=justification_link,
                 options=[
                     QuizOptionInput(label=o["label"], is_correct=o["is_correct"], order=o["order"])
                     for o in options
@@ -4516,6 +4588,9 @@ def _parse_quiz_excel_to_questions(contents: bytes, filename: str) -> List[QuizQ
                 prompt=prompt,
                 question_type="matching",
                 points=group["points"],
+                explanation=group.get("explanation"),
+                justification=group.get("justification"),
+                justification_link=group.get("justification_link"),
                 options=opts,
             )
         )
@@ -4755,6 +4830,9 @@ async def submit_bank_quiz(
             "is_correct": ok,
             "selected_options": selected_opts,
             "correct_options": correct_opts,
+            "explanation": (getattr(q, "explanation", None) or "").strip() or None,
+            "justification": (getattr(q, "justification", None) or "").strip() or None,
+            "justification_link": (getattr(q, "justification_link", None) or "").strip() or None,
         })
 
     percent = 0 if total_points == 0 else round((earned / total_points) * 100)

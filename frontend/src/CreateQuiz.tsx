@@ -31,6 +31,9 @@ type QuizQuestionDraft = {
   question_type: QuizQuestionType;
   points: number;
   options: QuizOptionDraft[];
+  explanation?: string;
+  justification?: string;
+  justification_link?: string;
 };
 
 type BankQuiz = {
@@ -49,6 +52,9 @@ type BankQuiz = {
     prompt: string;
     question_type: QuizQuestionType;
     points: number;
+    explanation?: string | null;
+    justification?: string | null;
+    justification_link?: string | null;
     options: Array<{
       id: number;
       label: string;
@@ -68,6 +74,9 @@ const emptyQuestion = (type: QuizQuestionType = "single"): QuizQuestionDraft => 
       prompt: "",
       question_type: "true_false",
       points: 1,
+      explanation: "",
+      justification: "",
+      justification_link: "",
       options: [
         { label: "True", is_correct: true },
         { label: "False", is_correct: false },
@@ -79,6 +88,9 @@ const emptyQuestion = (type: QuizQuestionType = "single"): QuizQuestionDraft => 
       prompt: "",
       question_type: "matching",
       points: 1,
+      explanation: "",
+      justification: "",
+      justification_link: "",
       options: [
         { label: "", is_correct: false, match_side: "left", match_key: "p1" },
         { label: "", is_correct: false, match_side: "right", match_key: "p1" },
@@ -91,6 +103,9 @@ const emptyQuestion = (type: QuizQuestionType = "single"): QuizQuestionDraft => 
     prompt: "",
     question_type: type,
     points: 1,
+    explanation: "",
+    justification: "",
+    justification_link: "",
     options: [
       { label: "", is_correct: true },
       { label: "", is_correct: false },
@@ -369,6 +384,9 @@ const CreateQuiz = () => {
             prompt: item.prompt,
             question_type: item.question_type,
             points: item.points || 1,
+            explanation: item.explanation || "",
+            justification: item.justification || "",
+            justification_link: item.justification_link || "",
             options: (item.options || []).map((o) => ({
               label: o.label,
               is_correct: Boolean(o.is_correct),
@@ -536,6 +554,9 @@ const CreateQuiz = () => {
               question_type: q.question_type,
               points: Math.max(1, Number(q.points) || 1),
               order: qi,
+              explanation: (q.explanation || "").trim() || null,
+              justification: (q.justification || "").trim() || null,
+              justification_link: (q.justification_link || "").trim() || null,
               options: q.options.map((o, oi) => ({
                 label: o.label.trim(),
                 is_correct: Boolean(o.is_correct),
@@ -596,6 +617,9 @@ const CreateQuiz = () => {
             prompt: item.prompt,
             question_type: item.question_type,
             points: item.points || 1,
+            explanation: item.explanation || "",
+            justification: item.justification || "",
+            justification_link: item.justification_link || "",
             options: (item.options || []).map((o) => ({
               label: o.label,
               is_correct: Boolean(o.is_correct),
@@ -855,6 +879,11 @@ const CreateQuiz = () => {
             </li>
             <li>
               <span className="font-semibold">matching:</span> match_left / match_right with the same prompt per pair
+            </li>
+            <li>
+              <span className="font-semibold">explanation</span> /{" "}
+              <span className="font-semibold">justification</span> /{" "}
+              <span className="font-semibold">justification_link</span> (all optional): shown after submit under View answers; link opens in a new tab
             </li>
           </ul>
         </div>

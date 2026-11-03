@@ -37,6 +37,16 @@ type ReviewRow = {
   is_correct: boolean;
   selected_options: { id: number; label: string }[];
   correct_options: { id: number; label: string }[];
+  explanation?: string | null;
+  justification?: string | null;
+  justification_link?: string | null;
+};
+
+const normalizeExternalUrl = (raw: string) => {
+  const t = raw.trim();
+  if (!t) return "";
+  if (/^https?:\/\//i.test(t)) return t;
+  return `https://${t}`;
 };
 
 type SubmitResult = {
@@ -622,6 +632,31 @@ const NativeQuizPlayer = ({ lessonId, quizId, lessonTitle, onBack, onCompleted }
                               Correct: {row.correct_options.map((o) => o.label).join("; ")}
                             </p>
                           )}
+                          {row.explanation ? (
+                            <p className="mt-1.5 text-xs text-slate-600">
+                              <span className="font-semibold text-slate-700">Explanation:</span>{" "}
+                              {row.explanation}
+                            </p>
+                          ) : null}
+                          {row.justification ? (
+                            <p className="mt-0.5 text-xs text-slate-600">
+                              <span className="font-semibold text-slate-700">Justification:</span>{" "}
+                              {row.justification}
+                            </p>
+                          ) : null}
+                          {row.justification_link ? (
+                            <p className="mt-0.5 text-xs">
+                              <span className="font-semibold text-slate-700">Link: </span>
+                              <a
+                                href={normalizeExternalUrl(row.justification_link)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="break-all text-[#005EB8] underline"
+                              >
+                                {row.justification_link}
+                              </a>
+                            </p>
+                          ) : null}
                         </div>
                       </div>
                     </div>

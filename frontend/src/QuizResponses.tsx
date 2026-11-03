@@ -52,6 +52,9 @@ type AttemptDetail = {
     points: number;
     selected_options: { id: number; label: string }[];
     correct_options: { id: number; label: string }[];
+    explanation?: string | null;
+    justification?: string | null;
+    justification_link?: string | null;
   }[];
 };
 
@@ -398,6 +401,33 @@ const QuizResponses = () => {
                         {ans.correct_options.map((o) => o.label).join("; ")}
                       </span>
                     </p>
+                    {ans.explanation ? (
+                      <p className="mt-1 text-sm text-slate-600">
+                        <span className="font-semibold text-slate-700">Explanation:</span> {ans.explanation}
+                      </p>
+                    ) : null}
+                    {ans.justification ? (
+                      <p className="mt-0.5 text-sm text-slate-600">
+                        <span className="font-semibold text-slate-700">Justification:</span> {ans.justification}
+                      </p>
+                    ) : null}
+                    {ans.justification_link ? (
+                      <p className="mt-0.5 text-sm">
+                        <span className="font-semibold text-slate-700">Link: </span>
+                        <a
+                          href={
+                            /^https?:\/\//i.test(ans.justification_link.trim())
+                              ? ans.justification_link.trim()
+                              : `https://${ans.justification_link.trim()}`
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="break-all text-[#005EB8] underline"
+                        >
+                          {ans.justification_link}
+                        </a>
+                      </p>
+                    ) : null}
                   </div>
                 ))}
               </div>
