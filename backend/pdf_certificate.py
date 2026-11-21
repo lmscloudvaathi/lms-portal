@@ -8,7 +8,7 @@ from typing import Optional
 
 from certificate_html import build_certificate_html
 from certificate_layout import CANVAS_HEIGHT, CANVAS_WIDTH
-from template_assets import resolve_template_png
+from template_assets import resolve_certificate_asset
 
 GENERATED_DIR = Path(__file__).resolve().parent / "generated"
 
@@ -87,28 +87,47 @@ async def close_shared_browser() -> None:
         _browser = None
 
 
+def _ensure_assets() -> None:
+    for name in ("medal", "logo", "signature", "skillIndia", "msme"):
+        resolve_certificate_asset(name)
+
+
 async def generate_certificate_pdf_with_browser(
     *,
     recipient_name: str,
-    course_title: str,
-    credential_id: str,
+    program_name: Optional[str] = None,
+    course_title: Optional[str] = None,
+    certificate_id: Optional[str] = None,
+    credential_id: Optional[str] = None,
     issued_at=None,
+    duration_hours: Optional[int] = None,
+    subject_area: Optional[str] = None,
     body_text: Optional[str] = None,
     email: Optional[str] = None,
+    category: Optional[str] = None,
+    language: Optional[str] = None,
     output_path: Optional[Path] = None,
     browser=None,
+    also_png: Optional[Path] = None,
 ) -> Path:
-    resolve_template_png()
+    _ensure_assets()
+    cert_id = certificate_id or credential_id or "UNKNOWN"
     html = build_certificate_html(
         recipient_name=recipient_name,
+        program_name=program_name or course_title,
         course_title=course_title,
-        credential_id=credential_id,
+        certificate_id=cert_id,
+        credential_id=cert_id,
         issued_at=issued_at,
+        duration_hours=duration_hours,
+        subject_area=subject_area,
         body_text=body_text,
         email=email,
+        category=category,
+        language=language,
     )
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
-    dest = output_path or (GENERATED_DIR / f"{credential_id}.pdf")
+    dest = output_path or (GENERATED_DIR / f"{cert_id}.pdf")
 
     owned_browser = browser is None
     if owned_browser:
@@ -128,14 +147,27 @@ async def generate_certificate_pdf_with_browser(
             await page.wait_for_timeout(800)
         await page.pdf(
             path=str(dest),
-            width=f"{CANVAS_WIDTH}px",
-            height=f"{CANVAS_HEIGHT}px",
+            format="A4",
+            landscape=True,
             print_background=True,
-            margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
             prefer_css_page_size=True,
+            margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
         )
     finally:
         await page.close()
+
+    if also_png is not None:
+        also_png.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            import fitz  # pymupdf
+
+            doc = fitz.open(dest)
+            pix = doc[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            pix.save(str(also_png))
+            doc.close()
+        except Exception:
+            # Fallback: leave PNG unavailable rather than a CSS-pt skewed screenshot.
+            pass
 
     return dest
 
@@ -143,11 +175,17 @@ async def generate_certificate_pdf_with_browser(
 async def generate_certificate_pdf(
     *,
     recipient_name: str,
-    course_title: str,
-    credential_id: str,
+    program_name: Optional[str] = None,
+    course_title: Optional[str] = None,
+    certificate_id: Optional[str] = None,
+    credential_id: Optional[str] = None,
     issued_at=None,
+    duration_hours: Optional[int] = None,
+    subject_area: Optional[str] = None,
     body_text: Optional[str] = None,
     email: Optional[str] = None,
+    category: Optional[str] = None,
+    language: Optional[str] = None,
     output_path: Optional[Path] = None,
     browser=None,
 ) -> Path:
@@ -155,11 +193,17 @@ async def generate_certificate_pdf(
     try:
         return await generate_certificate_pdf_with_browser(
             recipient_name=recipient_name,
+            program_name=program_name,
             course_title=course_title,
+            certificate_id=certificate_id,
             credential_id=credential_id,
             issued_at=issued_at,
+            duration_hours=duration_hours,
+            subject_area=subject_area,
             body_text=body_text,
             email=email,
+            category=category,
+            language=language,
             output_path=output_path,
             browser=browser,
         )
@@ -175,9 +219,13 @@ async def generate_certificate_pdf(
         return await asyncio.to_thread(
             generate_certificate_pdf_with_reportlab,
             recipient_name=recipient_name,
+            program_name=program_name or course_title,
             course_title=course_title,
-            credential_id=credential_id,
+            certificate_id=certificate_id or credential_id,
+            credential_id=credential_id or certificate_id,
             issued_at=issued_at,
+            duration_hours=duration_hours,
+            subject_area=subject_area,
             body_text=body_text,
             email=email,
             output_path=output_path,

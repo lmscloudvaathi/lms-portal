@@ -10,7 +10,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import models
-from certificate_copy import build_course_body, default_body_text, format_recipient_name
+from certificate_copy import (
+    build_course_body,
+    duration_hours_from_minutes,
+    format_recipient_name,
+    resolve_subject_area,
+)
 from certificate_email import send_certificate_email, verify_url
 from certificate_id import allocate_credential_id
 from pdf_certificate import GENERATED_DIR, generate_certificate_pdf
@@ -107,13 +112,50 @@ async def course_completed_at(db: AsyncSession, user_id: int, course: models.Cou
 
 
 def compose_course_body(course: models.Course, duration_minutes: int = 0) -> str:
-    return build_course_body(
-        title=course.title or "this programme",
-        description=course.description,
-        duration_minutes=duration_minutes,
+    hours = duration_hours_from_minutes(duration_minutes)
+    subject = resolve_subject_area(
+        program_name=course.title,
         category=getattr(course, "category", None),
         language=getattr(course, "language", None),
     )
+    return build_course_body(
+        title=course.title or "Program",
+        duration_hours=hours,
+        subject_area=subject,
+        description=course.description,
+        category=getattr(course, "category", None),
+        language=getattr(course, "language", None),
+    )
+
+
+def _certificate_render_kwargs(
+    cert: models.UserCertificate,
+    user: models.User,
+    course: models.Course,
+    *,
+    duration_minutes: int = 0,
+) -> dict:
+    hours = duration_hours_from_minutes(duration_minutes)
+    subject = resolve_subject_area(
+        program_name=course.title,
+        category=getattr(course, "category", None),
+        language=getattr(course, "language", None),
+    )
+    body = compose_course_body(course, duration_minutes)
+    return {
+        "recipient_name": cert.recipient_name or user.full_name,
+        "program_name": course.title,
+        "course_title": course.title,
+        "certificate_id": cert.certificate_id,
+        "credential_id": cert.certificate_id,
+        "issued_at": cert.issued_at,
+        "duration_hours": hours,
+        "subject_area": subject,
+        "body_text": body,
+        "email": user.email,
+        "category": getattr(course, "category", None),
+        "language": getattr(course, "language", None),
+    }
 
 
 async def get_user_certificate(
@@ -168,16 +210,11 @@ async def render_certificate_pdf(
 ) -> Path:
     dest = _pdf_path_for(cert)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    # Always use the canonical course body (no URLs / verify links on the PDF).
-    body = default_body_text(course.title or "this programme")
-    cert.body_text = body
+    duration_minutes = await course_duration_minutes(db, course)
+    kwargs = _certificate_render_kwargs(cert, user, course, duration_minutes=duration_minutes)
+    cert.body_text = kwargs["body_text"]
     path = await generate_certificate_pdf(
-        recipient_name=cert.recipient_name or user.full_name,
-        course_title=course.title,
-        credential_id=cert.certificate_id,
-        issued_at=cert.issued_at,
-        body_text=body,
-        email=user.email,
+        **kwargs,
         output_path=dest,
     )
     backend_root = Path(__file__).resolve().parent
@@ -301,7 +338,8 @@ async def ensure_certificate_pdf(
     course: models.Course,
 ) -> Path:
     path = _pdf_path_for(cert)
-    canonical = default_body_text(course.title or "this programme")
+    duration_minutes = await course_duration_minutes(db, course)
+    canonical = compose_course_body(course, duration_minutes)
     body_stale = (cert.body_text or "").strip() != canonical
     if body_stale or not cert.issued_at:
         cert.body_text = canonical

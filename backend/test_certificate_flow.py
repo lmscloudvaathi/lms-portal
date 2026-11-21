@@ -19,7 +19,7 @@ from certificate_id import format_certificate_id, compact_prefix
 from certificate_course_codes import build_certificate_prefix, resolve_course_certificate_code
 from database import AsyncSessionLocal, engine
 from pdf_certificate import close_shared_browser
-from template_assets import resolve_template_png
+from template_assets import resolve_certificate_asset
 
 
 async def setup_db() -> None:
@@ -145,7 +145,6 @@ async def run_flow_test() -> dict:
 
 async def generate_visual_sample(output_id: str) -> Path | None:
     from certificate_copy import build_course_body, format_recipient_name
-    from certificate_html import build_certificate_html
     from pdf_certificate import generate_certificate_pdf_with_browser
 
     course = models.Course(
@@ -157,7 +156,8 @@ async def generate_visual_sample(output_id: str) -> Path | None:
     body = build_course_body(
         title=course.title,
         description=course.description,
-        duration_minutes=1200,
+        duration_hours=20,
+        subject_area="Information Security",
         category=course.category,
     )
     out_dir = Path(__file__).resolve().parent / "generated"
@@ -167,9 +167,11 @@ async def generate_visual_sample(output_id: str) -> Path | None:
     try:
         await generate_certificate_pdf_with_browser(
             recipient_name=recipient,
-            course_title=course.title,
-            credential_id=output_id,
+            program_name=course.title,
+            certificate_id=output_id,
             issued_at=datetime.utcnow(),
+            duration_hours=20,
+            subject_area="Information Security",
             body_text=body,
             email="student@cloudvaathi.in",
             output_path=pdf_path,
@@ -181,7 +183,7 @@ async def generate_visual_sample(output_id: str) -> Path | None:
 
 async def main() -> None:
     print("=== CERTIFICATE AUTO-GENERATE FLOW TEST ===\n")
-    print(f"Template: {resolve_template_png()}\n")
+    print(f"Medal asset: {resolve_certificate_asset('medal')}\n")
 
     results = await run_flow_test()
     print()

@@ -2632,9 +2632,10 @@ async def certificate_health():
     detail = None
     try:
         import reportlab  # noqa: F401
-        from template_assets import resolve_template_png
+        from template_assets import resolve_certificate_asset
 
-        resolve_template_png()
+        for _asset in ("medal", "logo", "signature", "skillIndia", "msme"):
+            resolve_certificate_asset(_asset)
         reportlab_ok = True
     except Exception as exc:
         detail = f"reportlab:{exc}"

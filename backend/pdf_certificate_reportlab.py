@@ -1,8 +1,7 @@
-"""ReportLab certificate PDF fallback — works without Playwright/Chromium."""
+"""ReportLab certificate PDF fallback — layered assets, no Playwright/Chromium required."""
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -12,9 +11,16 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
-from certificate_copy import default_body_text, format_issued_date, format_recipient_name
-from certificate_layout import CANVAS_HEIGHT, CANVAS_WIDTH, load_layout
-from template_assets import resolve_template_png
+from certificate_copy import (
+    build_course_body,
+    clean_text,
+    format_issued_month_year,
+    format_recipient_name,
+    normalize_program_name,
+    resolve_subject_area,
+)
+from certificate_layout import BLUE, BROWN, CANVAS_HEIGHT, CANVAS_WIDTH, LAYOUT_PT, NAVY, SIDH_ID_TEXT
+from template_assets import resolve_certificate_asset
 
 logger = logging.getLogger(__name__)
 
@@ -23,55 +29,54 @@ FONTS_DIR = ASSETS_DIR / "fonts"
 GENERATED_DIR = Path(__file__).resolve().parent / "generated"
 
 _FONTS_REGISTERED = False
+DISPLAY_FONT = "Helvetica-Bold"
+SERIF_FONT = "Times-Roman"
 
 
 def _register_fonts() -> None:
-    global _FONTS_REGISTERED
+    global _FONTS_REGISTERED, DISPLAY_FONT, SERIF_FONT
     if _FONTS_REGISTERED:
         return
-    pairs = [
-        ("Oswald-Bold", "Oswald-Bold.ttf"),
-        ("Montserrat", "Montserrat-Regular.ttf"),
-        ("Montserrat-SemiBold", "Montserrat-SemiBold.ttf"),
-        ("GreatVibes", "GreatVibes-Regular.ttf"),
+    display_candidates = [
+        ("Norwester", "Norwester.otf"),
+        ("Norwester", "Norwester.ttf"),
+        ("Norwester", "Anton-Regular.ttf"),
+        ("Norwester", "Staatliches-Regular.ttf"),
+        ("Norwester", "Oswald-Bold.ttf"),
     ]
-    for name, filename in pairs:
+    for name, filename in display_candidates:
         path = FONTS_DIR / filename
         if path.exists():
             try:
                 pdfmetrics.registerFont(TTFont(name, str(path)))
+                DISPLAY_FONT = name
+                break
             except Exception:
-                logger.exception("Could not register font %s", filename)
+                logger.exception("Could not register display font %s", filename)
+
+    serif_path = FONTS_DIR / "SourceSerif4-Regular.ttf"
+    if serif_path.exists():
+        try:
+            pdfmetrics.registerFont(TTFont("SourceSerif4", str(serif_path)))
+            SERIF_FONT = "SourceSerif4"
+        except Exception:
+            logger.exception("Could not register Source Serif 4")
     _FONTS_REGISTERED = True
 
 
-def _map_font(family: str, weight: str = "400", style: str = "normal") -> str:
-    fam = (family or "").lower()
-    w = str(weight or "400")
-    if fam == "oswald":
-        return "Oswald-Bold" if "Oswald-Bold" in pdfmetrics.getRegisteredFontNames() else "Helvetica-Bold"
-    if fam == "montserrat":
-        if w in {"600", "700", "bold"} and "Montserrat-SemiBold" in pdfmetrics.getRegisteredFontNames():
-            return "Montserrat-SemiBold"
-        if "Montserrat" in pdfmetrics.getRegisteredFontNames():
-            return "Montserrat"
-        return "Helvetica-Bold" if w in {"600", "700", "bold"} else "Helvetica"
-    if style == "italic":
-        return "Times-Italic"
-    return "Times-Roman"
+def _hex(color: str):
+    c = color.lstrip("#")
+    return tuple(int(c[i : i + 2], 16) / 255 for i in (0, 2, 4))
 
 
-def _body_plain(text: str) -> str:
-    cleaned = re.sub(r"\*\*(.+?)\*\*", lambda m: f"‘{m.group(1).strip()}’", text or "")
-    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
-    cleaned = cleaned.replace("&nbsp;", " ").replace("&amp;", "&")
-    cleaned = re.sub(r"[ \t]+", " ", cleaned)
-    return cleaned.strip()
+def _y_top(page_h: float, top: float) -> float:
+    """Convert CSS top (from page top) to ReportLab y (from page bottom) for glyph top."""
+    return page_h - top
 
 
 def _fit_font_size(c: canvas.Canvas, text: str, font: str, max_size: float, min_size: float, max_width: float) -> float:
     lo, hi, best = min_size, max_size, min_size
-    while hi - lo > 0.25:
+    while hi - lo > 0.2:
         mid = (lo + hi) / 2
         if c.stringWidth(text, font, mid) <= max_width:
             best = mid
@@ -101,103 +106,157 @@ def _wrap_lines(c: canvas.Canvas, text: str, font: str, size: float, max_width: 
 def generate_certificate_pdf_with_reportlab(
     *,
     recipient_name: str,
-    course_title: str,
-    credential_id: str,
+    program_name: Optional[str] = None,
+    course_title: Optional[str] = None,
+    certificate_id: Optional[str] = None,
+    credential_id: Optional[str] = None,
     issued_at: Optional[datetime] = None,
+    duration_hours: Optional[int] = None,
+    subject_area: Optional[str] = None,
     body_text: Optional[str] = None,
     email: Optional[str] = None,
+    category: Optional[str] = None,
+    language: Optional[str] = None,
     output_path: Optional[Path] = None,
 ) -> Path:
     _register_fonts()
-    template = resolve_template_png()
-    layout = load_layout()
-    elements = layout.get("elements") or {}
-
+    layout = LAYOUT_PT
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
-    dest = output_path or (GENERATED_DIR / f"{credential_id}.pdf")
+    cert_id = clean_text(certificate_id or credential_id, fallback="UNKNOWN")
+    dest = output_path or (GENERATED_DIR / f"{cert_id}.pdf")
 
     width, height = float(CANVAS_WIDTH), float(CANVAS_HEIGHT)
     c = canvas.Canvas(str(dest), pagesize=(width, height))
-    c.drawImage(ImageReader(str(template)), 0, 0, width=width, height=height, preserveAspectRatio=False, mask="auto")
+    c.setFillColorRGB(1, 1, 1)
+    c.rect(0, 0, width, height, fill=1, stroke=0)
+
+    # Navy bars
+    c.setFillColorRGB(*_hex(NAVY))
+    for key in ("topBar", "bottomBar"):
+        box = layout[key]
+        c.rect(box["x"], height - box["y"] - box["height"], box["width"], box["height"], fill=1, stroke=0)
+
+    # Images
+    for key, asset in (
+        ("medal", "medal"),
+        ("logo", "logo"),
+        ("signature", "signature"),
+        ("skillIndia", "skillIndia"),
+        ("msme", "msme"),
+    ):
+        box = layout[key]
+        path = resolve_certificate_asset(asset)
+        c.drawImage(
+            ImageReader(str(path)),
+            box["x"],
+            height - box["y"] - box["height"],
+            width=box["width"],
+            height=box["height"],
+            mask="auto",
+            preserveAspectRatio=True,
+            anchor="c",
+        )
 
     name = format_recipient_name(recipient_name, email)
-    intro = "Cloudvaathi certifies that"
-    body = _body_plain(body_text or default_body_text(course_title))
-    credential = f"CERTIFICATION ID : {credential_id}"
-    issued = f"CERTIFICATION DATE : {format_issued_date(issued_at)}"
+    program = normalize_program_name(program_name or course_title)
+    hours = int(duration_hours) if duration_hours is not None else 30
+    subject = resolve_subject_area(
+        subject_area=subject_area,
+        program_name=program,
+        category=category,
+        language=language,
+    )
+    body = clean_text(body_text) or build_course_body(
+        program_name=program, duration_hours=hours, subject_area=subject
+    )
 
-    def draw_box_text(
-        key: str,
-        text: str,
-        *,
-        fit_name: bool = False,
-        multiline: bool = False,
-    ) -> None:
-        el = elements.get(key) or {}
-        x_pct = float(el.get("x") or 0)
-        y_pct = float(el.get("y") or 0)
-        w_pct = float(el.get("width") or 100)
-        h_pct = float(el.get("height") or 10)
-        x = width * x_pct / 100.0
-        box_top = height * (1.0 - y_pct / 100.0)
-        box_bottom = height * (1.0 - (y_pct + h_pct) / 100.0)
-        box_w = width * w_pct / 100.0
-        box_h = box_top - box_bottom
-
-        font = _map_font(str(el.get("fontFamily") or "Georgia"), str(el.get("fontWeight") or "400"), str(el.get("fontStyle") or "normal"))
-        color = str(el.get("color") or "#1A1A1A").lstrip("#")
-        if len(color) == 6:
-            r, g, b = int(color[0:2], 16) / 255, int(color[2:4], 16) / 255, int(color[4:6], 16) / 255
-            c.setFillColorRGB(r, g, b)
-        else:
-            c.setFillColorRGB(0.1, 0.1, 0.1)
-
-        max_size = float(el.get("maxFontSize") or el.get("fontSize") or 14)
-        min_size = float(el.get("minFontSize") or 11)
-        line_height = float(el.get("lineHeight") or 1.4)
-        align = str(el.get("textAlign") or "left").lower()
-
-        if fit_name:
-            size = _fit_font_size(c, text, font, max_size, min_size, box_w)
-            c.setFont(font, size)
-            baseline = box_bottom + (box_h - size) / 2 + size * 0.15
-            c.drawString(x, baseline, text)
-            return
-
-        if multiline:
-            size = max_size
-            lines = _wrap_lines(c, text, font, size, box_w)
-            while size > min_size and len(lines) * size * line_height > box_h:
-                size -= 0.5
-                lines = _wrap_lines(c, text, font, size, box_w)
-            c.setFont(font, size)
-            leading = size * line_height
-            cursor_y = box_top - size
-            for line in lines:
-                if cursor_y < box_bottom:
-                    break
-                c.drawString(x, cursor_y, line)
-                cursor_y -= leading
-            return
-
-        size = float(el.get("fontSize") or max_size)
+    def draw_left(text: str, *, font: str, size: float, color: str, x: float, top: float) -> None:
         c.setFont(font, size)
-        baseline = box_bottom + (box_h - size) / 2 + size * 0.15
-        if align == "right":
-            c.drawRightString(x + box_w, baseline, text)
-        elif align == "center":
-            c.drawCentredString(x + box_w / 2, baseline, text)
-        else:
-            c.drawString(x, baseline, text)
+        c.setFillColorRGB(*_hex(color))
+        c.drawString(x, _y_top(height, top) - size * 0.8, text)
 
-    draw_box_text("intro", intro)
-    draw_box_text("recipient", name, fit_name=True)
-    draw_box_text("body", body, multiline=True)
-    draw_box_text("credential", credential)
-    draw_box_text("issuedDate", issued)
+    def draw_centered(text: str, *, font: str, size: float, color: str, center_x: float, top: float) -> None:
+        c.setFont(font, size)
+        c.setFillColorRGB(*_hex(color))
+        c.drawCentredString(center_x, _y_top(height, top) - size * 0.8, text)
+
+    title = layout["titleCertificate"]
+    of_comp = layout["titleOfCompletion"]
+    draw_left("CERTIFICATE", font=DISPLAY_FONT, size=title["fontSize"], color=NAVY, x=title["x"], top=title["y"])
+    draw_left("OF COMPLETION", font=DISPLAY_FONT, size=of_comp["fontSize"], color=NAVY, x=of_comp["x"], top=of_comp["y"])
+
+    sidh = layout["sidhId"]
+    draw_centered(SIDH_ID_TEXT, font=SERIF_FONT, size=sidh["fontSize"], color=BLUE, center_x=sidh["centerX"], top=sidh["y"])
+
+    awarded = layout["awardedTo"]
+    draw_left(
+        "This certificate is awarded to",
+        font=SERIF_FONT,
+        size=awarded["fontSize"],
+        color=NAVY,
+        x=awarded["x"],
+        top=awarded["y"],
+    )
+
+    recipient = layout["recipient"]
+    max_w = recipient["maxX"] - recipient["x"]
+    name_size = _fit_font_size(c, name, DISPLAY_FONT, recipient["fontSize"], recipient["minFontSize"], max_w)
+    draw_left(name, font=DISPLAY_FONT, size=name_size, color=BROWN, x=recipient["x"], top=recipient["y"])
+
+    body_box = layout["body"]
+    size = float(body_box["fontSize"])
+    min_size = float(body_box["minFontSize"])
+    line = float(body_box["lineHeight"])
+    ratio = line / float(body_box["fontSize"])
+    lines = _wrap_lines(c, body, SERIF_FONT, size, body_box["width"])
+    while (len(lines) > 4 or body_box["y"] + len(lines) * size * ratio > body_box["maxBottom"]) and size > min_size:
+        size -= 0.25
+        lines = _wrap_lines(c, body, SERIF_FONT, size, body_box["width"])
+    c.setFont(SERIF_FONT, size)
+    c.setFillColorRGB(*_hex(NAVY))
+    y = _y_top(height, body_box["y"]) - size * 0.8
+    for line_text in lines[:4]:
+        c.drawString(body_box["x"], y, line_text)
+        y -= size * ratio
+
+    cert_box = layout["certificationId"]
+    issued_box = layout["issuedOn"]
+    draw_left(
+        f"CERTIFICATION ID : {cert_id}",
+        font=SERIF_FONT,
+        size=cert_box["fontSize"],
+        color=BLUE,
+        x=cert_box["x"],
+        top=cert_box["y"],
+    )
+    draw_left(
+        f"CERTIFICATE ISSUED ON {format_issued_month_year(issued_at)}",
+        font=SERIF_FONT,
+        size=issued_box["fontSize"],
+        color=BLUE,
+        x=issued_box["x"],
+        top=issued_box["y"],
+    )
+
+    director = layout["learningDirector"]
+    brand = layout["brandUnderSignature"]
+    draw_centered(
+        "LEARNING DIRECTOR",
+        font=DISPLAY_FONT,
+        size=director["fontSize"],
+        color=NAVY,
+        center_x=director["centerX"],
+        top=director["y"],
+    )
+    draw_centered(
+        "CLOUDVAATHI",
+        font=SERIF_FONT,
+        size=brand["fontSize"],
+        color=BROWN,
+        center_x=brand["centerX"],
+        top=brand["y"],
+    )
 
     c.showPage()
     c.save()
-    if not dest.exists() or dest.stat().st_size <= 0:
-        raise RuntimeError("ReportLab certificate PDF was not written.")
     return dest
