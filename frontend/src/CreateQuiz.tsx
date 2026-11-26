@@ -607,8 +607,9 @@ const CreateQuiz = () => {
     try {
       const form = new FormData();
       form.append("file", file);
+      // Do not set Content-Type manually — browser/axios must add the multipart boundary.
       const res = await axios.post(`${API_BASE_URL}/quizzes/${editingId}/import-excel`, form, {
-        headers: { ...authHeaders(), "Content-Type": "multipart/form-data" },
+        headers: authHeaders(),
       });
       const q: BankQuiz = res.data;
       if (q.questions?.length) {
